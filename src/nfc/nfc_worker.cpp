@@ -137,7 +137,12 @@ void NfcWorker::stop()
     }
     _command_cv.notify_all();
     if (_thread.joinable()) {
+        const auto startedAt = std::chrono::steady_clock::now();
+        spdlog::info("NFC worker: stop requested; joining hardware thread");
         _thread.join();
+        const auto elapsedMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startedAt).count();
+        spdlog::info("NFC worker: hardware thread joined after {} ms", elapsedMs);
     }
     _running.store(false, std::memory_order_release);
 }
@@ -242,7 +247,7 @@ void NfcWorker::run()
                 spdlog::error("NFC worker: discovery failed: {}", message);
                 pushEvent(WorkerErrorEvent{"discovery", message, true});
                 clearPresence(true);
-                _backend->close();
+                _backend->closeImmediately();
                 initialized = false;
                 pushState(ReaderState::Error, "Discovery failed; retry required");
             }
@@ -261,10 +266,16 @@ void NfcWorker::run()
         std::lock_guard<std::mutex> commandLock(_command_mutex);
         _running.store(false, std::memory_order_release);
     }
+    spdlog::info("NFC worker: hardware loop stopped; closing backend");
     pushState(ReaderState::Stopping, "Stopping NFC reader");
     clearPresence(true);
-    _backend->close();
+    if (_stop_requested.load(std::memory_order_acquire)) {
+        _backend->closeImmediately();
+    } else {
+        _backend->close();
+    }
     pushState(ReaderState::Stopped, "NFC reader stopped");
+    spdlog::info("NFC worker: backend closed");
 }
 
 bool NfcWorker::initializeBackend(bool scanRequested, const CancellationToken& cancellation)
@@ -303,7 +314,7 @@ bool NfcWorker::initializeBackend(bool scanRequested, const CancellationToken& c
     } catch (const NfcBackendUnavailable& exception) {
         const std::string message = exceptionMessage(exception);
         spdlog::error("NFC reader: initialization attempt {} has no hardware backend: {}", attempt, message);
-        _backend->close();
+        _backend->closeImmediately();
         initializationGuard.release();
         pushEvent(InitializationFailedEvent{attempt, stage, message, true});
         pushState(ReaderState::Error, "Hardware backend unavailable");
@@ -312,7 +323,7 @@ bool NfcWorker::initializeBackend(bool scanRequested, const CancellationToken& c
         const std::string message = exceptionMessage(exception);
         spdlog::error("NFC reader: initialization attempt {} failed at {} after {} ms: {}", attempt, stage, elapsedMs(),
                       message);
-        _backend->close();
+        _backend->closeImmediately();
         initializationGuard.release();
         pushEvent(InitializationFailedEvent{attempt, stage, message, false});
         pushState(ReaderState::Error, "Initialization failed; retry required");
@@ -360,7 +371,7 @@ void NfcWorker::handleCommand(NfcCommand command, bool& initialized, bool& scanR
             const std::string message = exceptionMessage(exception);
             pushEvent(WorkerErrorEvent{"set scanning", message, true});
             clearPresence(true);
-            _backend->close();
+            _backend->closeImmediately();
             initialized = false;
             pushState(ReaderState::Error, "Scan mode change failed; retry required");
         }

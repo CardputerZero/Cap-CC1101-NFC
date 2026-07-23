@@ -97,6 +97,8 @@ bool initLvglHal(int32_t width, int32_t height)
     const char* device = envOrDefault("LV_LINUX_FBDEV_DEVICE", "/dev/fb0");
     if (lv_linux_fbdev_set_file(disp, device) != LV_RESULT_OK) {
         spdlog::error("Cap-CC1101-NFC HAL: failed to open framebuffer {}", device);
+        lv_display_delete(disp);
+        lv_deinit();
         return false;
     }
     return true;

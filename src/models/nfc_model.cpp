@@ -4,6 +4,7 @@
 
 #include <spdlog/spdlog.h>
 
+#include <chrono>
 #include <exception>
 #include <type_traits>
 #include <utility>
@@ -82,7 +83,12 @@ void NfcModel::stop()
         return;
     }
 
+    const auto startedAt = std::chrono::steady_clock::now();
+    spdlog::info("NFC model: waiting for worker shutdown");
     _worker->stop();
+    const auto elapsedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startedAt).count();
+    spdlog::info("NFC model: worker stopped after {} ms", elapsedMs);
     auto session = _tag_session.get();
     if (session && session->present) {
         session->present = false;

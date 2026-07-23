@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Cap-CC1101-NFC
-Exec=/usr/share/APPLaunch/bin/M5CardputerZero-Cap-CC1101-NFC
+Exec=/usr/bin/sudo -n -- /usr/share/APPLaunch/bin/M5CardputerZero-Cap-CC1101-NFC
 Terminal=false
 Icon=share/images/cap-cc1101-nfc.png
 Type=Application

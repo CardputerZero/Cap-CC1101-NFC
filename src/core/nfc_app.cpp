@@ -47,6 +47,10 @@ void NfcApp::stop()
         return;
     }
 
+    spdlog::info("NfcApp: stopping NFC model");
+    _model.stop();
+    spdlog::info("NfcApp: NFC model stopped; releasing UI");
+
     if (_route_observer_id != 0) {
         _router.currentPage().removeObserver(_route_observer_id);
         _route_observer_id = 0;
@@ -59,7 +63,6 @@ void NfcApp::stop()
         _current_vm->onExit();
         _current_vm = nullptr;
     }
-    _model.stop();
     if (_input_group) {
 #if LV_USE_SDL
         lv_indev_t* inputDevice = lv_indev_get_next(nullptr);
@@ -74,6 +77,7 @@ void NfcApp::stop()
         _input_group = nullptr;
     }
     _started = false;
+    spdlog::info("NfcApp: stop complete");
 }
 
 void NfcApp::onKey(uint32_t key)

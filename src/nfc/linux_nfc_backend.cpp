@@ -216,41 +216,25 @@ public:
                 info.protocols);
             return info;
         } catch (const NfcCancelled&) {
-            close();
+            closeImmediately();
             throw;
         } catch (const std::exception& exception) {
             const std::string message =
                 "ST25R3916 initialization failed at " + std::string(stage) + ": " + exception.what();
             spdlog::error("{}", message);
-            close();
+            closeImmediately();
             throw std::runtime_error(message);
         }
     }
 
     void close() noexcept override
     {
-        _scanning = false;
-        if (_driver) {
-            _driver->stop();
-            _driver.reset();
-        }
-        _transport.reset();
-        _spi.close();
-        if (_interrupt) {
-            _interrupt->release();
-            _interrupt.reset();
-        }
-        if (_chip_select) {
-            try {
-                _chip_select->setValue(true);
-            } catch (const std::exception& exception) {
-                spdlog::warn("NFC backend: failed to leave CS high during close: {}", exception.what());
-            }
-            _chip_select->release();
-            _chip_select.reset();
-        }
-        _power.disable();
-        _open = false;
+        closeImpl(true);
+    }
+
+    void closeImmediately() noexcept override
+    {
+        closeImpl(false);
     }
 
     void startDiscovery(const CancellationToken& cancellation) override
@@ -320,6 +304,55 @@ private:
     std::unique_ptr<St25r3916Driver> _driver;
     bool _open     = false;
     bool _scanning = false;
+
+    void closeImpl(bool graceful) noexcept
+    {
+        const bool hadResources =
+            _open || _driver || _transport || _spi.isOpen() || _interrupt || _chip_select || _power.enabled();
+        if (hadResources) {
+            spdlog::info("NFC backend: closing resources (mode={})", graceful ? "graceful" : "immediate");
+        }
+
+        _scanning = false;
+        if (_driver) {
+            if (graceful) {
+                spdlog::info("NFC backend: disabling RF field through ST25R3916");
+                _driver->stop();
+            }
+            _driver.reset();
+        }
+        _transport.reset();
+        if (_chip_select) {
+            spdlog::info("NFC backend: returning software CS high");
+            try {
+                _chip_select->setValue(true);
+            } catch (const std::exception& exception) {
+                spdlog::warn("NFC backend: failed to leave CS high during close: {}", exception.what());
+            }
+        }
+        if (_spi.isOpen()) {
+            spdlog::info("NFC backend: closing SPI device");
+        }
+        _spi.close();
+        if (_interrupt) {
+            spdlog::info("NFC backend: releasing IRQ GPIO");
+            _interrupt->release();
+            _interrupt.reset();
+        }
+        if (_chip_select) {
+            spdlog::info("NFC backend: releasing software CS GPIO");
+            _chip_select->release();
+            _chip_select.reset();
+        }
+        if (_power.enabled()) {
+            spdlog::info("NFC backend: disabling Cap power controls");
+        }
+        _power.disable();
+        _open = false;
+        if (hadResources) {
+            spdlog::info("NFC backend: resources closed");
+        }
+    }
 
     void requireOpen() const
     {
