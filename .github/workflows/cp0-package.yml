@@ -1,0 +1,95 @@
+name: cp0 package
+
+on:
+  push: {}
+  pull_request: {}
+  workflow_dispatch: {}
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+env:
+  BSP_VERSION: v0.0.4
+  BSP_SHA256: e51b6eb803ed08f450e459efbfe62dd0341440846f3be9d01da861fe6cfdebb0
+
+jobs:
+  build:
+    name: Test and build cp0 package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev python3-venv
+
+      - name: Bootstrap third-party dependencies
+        run: ./bootstrap.sh
+
+      - name: Build and run tests
+        run: |
+          cmake -S . -B build/tests -DCAP_NFC_USE_SDL=ON -DBUILD_TESTING=ON
+          cmake --build build/tests --parallel
+          ctest --test-dir build/tests --output-on-failure
+
+      - name: Cache CardputerZero BSP archive
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/docker-cache/sdk_bsp-v0.0.4.tar.gz
+            build/docker-cache/sdk_bsp-v0.0.4.tar.gz.validated-sha256
+          key: cp0-bsp-${{ runner.os }}-v0.0.4-e51b6eb803ed08f450e459efbfe62dd0341440846f3be9d01da861fe6cfdebb0
+
+      - name: Build cp0 package with target BSP
+        run: ./packaging/docker/package_deb.sh --clean
+
+      - name: Collect release assets
+        run: |
+          mkdir -p release-assets
+          cp dist/M5CardputerZero-Cap-CC1101-NFC release-assets/
+          cp dist/*.deb release-assets/
+          ls -lh release-assets
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cp0-package
+          path: release-assets/*
+          if-no-files-found: error
+
+  upload-release-assets:
+    name: Upload Debian package to GitHub Release
+    if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    needs: build
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download workflow artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cp0-package
+          path: release-assets
+
+      - name: Upload assets to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref_name }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --title "$RELEASE_TAG" \
+              --notes "Automated release for $RELEASE_TAG"
+          fi
+
+          gh release upload "$RELEASE_TAG" release-assets/*.deb --clobber
