@@ -110,10 +110,6 @@ void ScanPanel::setHidden(bool hidden)
 
 void ScanPanel::tick(uint32_t nowMs)
 {
-#if !LV_USE_SDL
-    (void)nowMs;
-    return;
-#else
     const uint32_t color = stateColor(_status, _session);
     const bool animate   = _status.state == nfc::ReaderState::Scanning && !(_session && _session->present);
     for (std::size_t index = 0; index < _rings.size(); ++index) {
@@ -129,7 +125,6 @@ void ScanPanel::tick(uint32_t nowMs)
         _rings[index]->setOpa(ui::toOpacity(opacity));
     }
     _antenna_dot->setBgColor(lv_color_hex(color));
-#endif
 }
 
 void ScanPanel::refresh()
@@ -137,16 +132,12 @@ void ScanPanel::refresh()
     const uint32_t color = stateColor(_status, _session);
     _status_badge->setColor(color);
     _summary->setTextColor(lv_color_hex(color));
-#if !LV_USE_SDL
-    // Avoid continuous framebuffer traffic while the current BSP exposes NFC CS
-    // outside the shared SPI0 bus lock. Device indicators update only on state changes.
     for (std::size_t index = 0; index < _rings.size(); ++index) {
         _rings[index]->setBorderColor(lv_color_hex(color));
         _rings[index]->setOpa(_session && _session->present ? static_cast<lv_opa_t>(168 - index * 24)
                                                             : static_cast<lv_opa_t>(126));
     }
     _antenna_dot->setBgColor(lv_color_hex(color));
-#endif
 
     if (_status.state == nfc::ReaderState::Error) {
         _status_badge->setText("ERROR");
