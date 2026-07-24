@@ -201,6 +201,7 @@ else()
         "${CAP_NFC_SRC_DIR}/nfc/st25r3916_driver.cpp"
     )
     list(APPEND CAP_NFC_HAL_CPP
+        "${CAP_NFC_SRC_DIR}/hal/cap_spi_overlay.cpp"
         "${CAP_NFC_SRC_DIR}/hal/cardputerzero_cap_power.cpp"
         "${CAP_NFC_SRC_DIR}/hal/linux_gpio_line.cpp"
         "${CAP_NFC_SRC_DIR}/hal/linux_spi_device.cpp"

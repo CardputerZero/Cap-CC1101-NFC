@@ -4,6 +4,7 @@
 #error "The ST25R3916 Linux backend requires Linux"
 #endif
 
+#include "hal/cap_spi_overlay.hpp"
 #include "hal/cardputerzero_cap_power.hpp"
 #include "hal/linux_gpio_line.hpp"
 #include "hal/linux_spi_device.hpp"
@@ -29,10 +30,9 @@ namespace {
 using namespace std::chrono_literals;
 
 struct LinuxBackendConfig {
-    std::string spiDevice{"/dev/spidev0.1"};
+    std::string spiDevice{"/dev/spidev0.2"};
     uint32_t spiSpeedHz = 5'000'000;
     std::string gpioChip{"/dev/gpiochip0"};
-    unsigned int csGpio       = 22;
     unsigned int irqGpio      = 23;
     unsigned int misoPullMode = 3;
 };
@@ -63,16 +63,11 @@ unsigned long envUnsigned(const char* name, unsigned long fallback, unsigned lon
 LinuxBackendConfig loadConfig()
 {
     LinuxBackendConfig config;
-    config.spiDevice = envString("CAP_NFC_SPI_DEVICE", config.spiDevice);
     config.spiSpeedHz =
         static_cast<uint32_t>(envUnsigned("CAP_NFC_SPI_SPEED_HZ", config.spiSpeedHz, 100'000, 10'000'000));
     config.gpioChip     = envString("CAP_NFC_GPIO_CHIP", config.gpioChip);
-    config.csGpio       = static_cast<unsigned int>(envUnsigned("CAP_NFC_CS_GPIO", config.csGpio, 0, 1023));
     config.irqGpio      = static_cast<unsigned int>(envUnsigned("CAP_NFC_IRQ_GPIO", config.irqGpio, 0, 1023));
     config.misoPullMode = static_cast<unsigned int>(envUnsigned("CAP_NFC_MISO_PULL_MODE", config.misoPullMode, 0, 3));
-    if (config.csGpio == config.irqGpio) {
-        throw std::runtime_error("CAP_NFC_CS_GPIO and CAP_NFC_IRQ_GPIO must be different lines");
-    }
     return config;
 }
 
@@ -99,25 +94,13 @@ void cancellableSleep(std::chrono::milliseconds duration, const CancellationToke
 
 class LinuxSt25r3916Transport final : public St25r3916Transport {
 public:
-    LinuxSt25r3916Transport(hal::LinuxSpiDevice& spi, hal::LinuxGpioLine& chipSelect, hal::LinuxGpioLine& interrupt)
-        : _spi(spi), _chip_select(chipSelect), _interrupt(interrupt)
+    LinuxSt25r3916Transport(hal::LinuxSpiDevice& spi, hal::LinuxGpioLine& interrupt) : _spi(spi), _interrupt(interrupt)
     {
     }
 
     void transfer(const uint8_t* transmit, uint8_t* receive, std::size_t size) override
     {
-        _chip_select.setValue(false);
-        try {
-            _spi.transfer(transmit, receive, size);
-        } catch (...) {
-            try {
-                _chip_select.setValue(true);
-            } catch (const std::exception& exception) {
-                spdlog::error("ST25R3916 transport: failed to release CS after SPI error: {}", exception.what());
-            }
-            throw;
-        }
-        _chip_select.setValue(true);
+        _spi.transfer(transmit, receive, size);
     }
 
     bool interruptAsserted() const override
@@ -142,7 +125,6 @@ public:
 
 private:
     hal::LinuxSpiDevice& _spi;
-    hal::LinuxGpioLine& _chip_select;
     hal::LinuxGpioLine& _interrupt;
 };
 
@@ -155,22 +137,22 @@ public:
         try {
             _config = loadConfig();
             spdlog::info(
-                "NFC backend: topology SPI={} mode=1 speed={} Hz no-kernel-CS, CS={}:{}, IRQ={}:{} rising-edge, "
+                "NFC backend: topology SPI={} mode=1 speed={} Hz kernel-CS2(GPIO22), IRQ={}:{} rising-edge, "
                 "MISO-pull-mode={}",
-                _config.spiDevice, _config.spiSpeedHz, _config.gpioChip, _config.csGpio, _config.gpioChip,
-                _config.irqGpio, _config.misoPullMode);
-            spdlog::warn(
-                "NFC backend: GPIO{} is a userspace chip-select; if this SPI controller is shared, request a "
-                "kernel-managed CS/spidev node from the BSP to make transfers atomic",
-                _config.csGpio);
+                _config.spiDevice, _config.spiSpeedHz, _config.gpioChip, _config.irqGpio, _config.misoPullMode);
 
-            stage        = "GPIO setup";
-            _chip_select = std::make_unique<hal::LinuxGpioLine>(_config.gpioChip, _config.csGpio);
-            _interrupt   = std::make_unique<hal::LinuxGpioLine>(_config.gpioChip, _config.irqGpio);
-            _chip_select->requestOutput(true);
+            stage = "SPI overlay load";
+            std::string overlayError;
+            if (!hal::ensureCapSpiOverlay(_config.spiDevice, overlayError, cancellation.nativeFlag())) {
+                cancellation.throwIfCancellationRequested();
+                throw std::runtime_error("Cap SPI overlay unavailable: " + overlayError);
+            }
+
+            stage      = "GPIO setup";
+            _interrupt = std::make_unique<hal::LinuxGpioLine>(_config.gpioChip, _config.irqGpio);
             _interrupt->requestRisingEdge();
-            spdlog::info("NFC backend: manual CS line {}:{} held high; IRQ line {}:{} armed", _config.gpioChip,
-                         _config.csGpio, _config.gpioChip, _config.irqGpio);
+            spdlog::info("NFC backend: kernel-managed CS2 active; IRQ line {}:{} armed", _config.gpioChip,
+                         _config.irqGpio);
 
             stage = "Cap power enable";
             spdlog::info("NFC backend: enabling Cap power (G26 POWER_EN + ext_5v_out LED class)");
@@ -187,11 +169,11 @@ public:
             spiConfig.speed_hz      = _config.spiSpeedHz;
             spiConfig.mode          = 1;
             spiConfig.bits_per_word = 8;
-            spiConfig.no_kernel_cs  = true;
+            spiConfig.no_kernel_cs  = false;
             _spi.open(spiConfig);
 
             stage      = "ST25R3916 probe and NFC-A setup";
-            _transport = std::make_unique<LinuxSt25r3916Transport>(_spi, *_chip_select, *_interrupt);
+            _transport = std::make_unique<LinuxSt25r3916Transport>(_spi, *_interrupt);
             St25r3916DriverConfig driverConfig;
             driverConfig.misoPullWhenDeselected = (_config.misoPullMode & 0x01) != 0;
             driverConfig.misoPullWhenSelected   = (_config.misoPullMode & 0x02) != 0;
@@ -202,8 +184,8 @@ public:
             info.backendName = "ST25R3916 Linux";
             info.chipName    = "ST25R3916";
             info.chipVersion = "ID " + hexByte(chip.identity) + " / rev " + std::to_string(chip.revision);
-            info.transport   = _config.spiDevice + " mode 1 @ " + std::to_string(_config.spiSpeedHz) +
-                             " Hz / manual CS GPIO" + std::to_string(_config.csGpio);
+            info.transport =
+                _config.spiDevice + " mode 1 @ " + std::to_string(_config.spiSpeedHz) + " Hz / kernel CS2 GPIO22";
             info.irq       = _config.gpioChip + ":" + std::to_string(_config.irqGpio) + " rising edge";
             info.power     = "ext_5v_out + GPIO26 POWER_EN";
             info.protocols = "NFC-A UID / Type 2 NDEF (bring-up)";
@@ -298,7 +280,6 @@ private:
     LinuxBackendConfig _config;
     hal::CardputerZeroCapPower _power;
     hal::LinuxSpiDevice _spi;
-    std::unique_ptr<hal::LinuxGpioLine> _chip_select;
     std::unique_ptr<hal::LinuxGpioLine> _interrupt;
     std::unique_ptr<LinuxSt25r3916Transport> _transport;
     std::unique_ptr<St25r3916Driver> _driver;
@@ -307,8 +288,7 @@ private:
 
     void closeImpl(bool graceful) noexcept
     {
-        const bool hadResources =
-            _open || _driver || _transport || _spi.isOpen() || _interrupt || _chip_select || _power.enabled();
+        const bool hadResources = _open || _driver || _transport || _spi.isOpen() || _interrupt || _power.enabled();
         if (hadResources) {
             spdlog::info("NFC backend: closing resources (mode={})", graceful ? "graceful" : "immediate");
         }
@@ -322,14 +302,6 @@ private:
             _driver.reset();
         }
         _transport.reset();
-        if (_chip_select) {
-            spdlog::info("NFC backend: returning software CS high");
-            try {
-                _chip_select->setValue(true);
-            } catch (const std::exception& exception) {
-                spdlog::warn("NFC backend: failed to leave CS high during close: {}", exception.what());
-            }
-        }
         if (_spi.isOpen()) {
             spdlog::info("NFC backend: closing SPI device");
         }
@@ -338,11 +310,6 @@ private:
             spdlog::info("NFC backend: releasing IRQ GPIO");
             _interrupt->release();
             _interrupt.reset();
-        }
-        if (_chip_select) {
-            spdlog::info("NFC backend: releasing software CS GPIO");
-            _chip_select->release();
-            _chip_select.reset();
         }
         if (_power.enabled()) {
             spdlog::info("NFC backend: disabling Cap power controls");

@@ -70,20 +70,20 @@ desktop mock data.
 
 ## Hardware
 
-The device build uses the Cap CC1101 ST25R3916 reader over `/dev/spidev0.1`,
-with GPIO22 as manual chip select and GPIO23 as interrupt. It requires access
-to the SPI and GPIO devices, the Cap pin controls, and the EXT5V LED-class power
-attribute. Hardware initialization errors are shown in the app.
+The device build uses the Cap CC1101 ST25R3916 reader over `/dev/spidev0.2`,
+with kernel-managed CS2 on GPIO22 and IRQ on GPIO23. Before reader
+initialization, the app checks the SPI node and, when needed, loads the
+BSP-provided `/boot/firmware/overlays/spi0-spidev2-gpio22-overlay.dtbo`. The
+overlay remains loaded until reboot.
 
 The Debian package launches this hardware app as root through a non-interactive,
 command-specific sudo rule for members of the `gpio` group. This works with the
 current APPLaunch behavior; the rule permits only the installed binary with no
 command arguments.
 
-The current CardputerZero BSP exposes NFC chip select as a userspace GPIO while
-the display shares SPI0. The app limits device animation and polling traffic as
-a workaround; a kernel-managed NFC chip select is recommended for reliable
-concurrent display and reader traffic.
+The current BSP may fail to apply the overlay at runtime. If initialization
+still reports a missing SPI node after loading, reboot once with
+`dtoverlay=spi0-spidev2-gpio22-overlay` in `/boot/firmware/config.txt`.
 
 The first release supports NFC-A UID discovery and Type 2 NDEF reading. Type 4
 NDEF and NFC-B/F/V discovery are not implemented.

@@ -147,7 +147,7 @@ Section: utils
 Priority: optional
 Architecture: ${DEB_ARCH}
 Maintainer: ${MAINTAINER}
-Depends: libc6, libstdc++6, libgcc-s1, ${GPIOD_PACKAGE_DEPENDENCY}, sudo
+Depends: libc6, libstdc++6, libgcc-s1, ${GPIOD_PACKAGE_DEPENDENCY}, raspi-utils-dt, sudo
 Installed-Size: ${INSTALLED_SIZE}
 Description: Cap CC1101 NFC reader application for M5CardputerZero APPLaunch
  Runtime NFC-A tag reader for the ST25R3916 on the Cap CC1101 accessory.
