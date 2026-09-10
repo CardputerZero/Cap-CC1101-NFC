@@ -17,25 +17,37 @@ using cap_nfc::nfc::CancellationToken;
 using cap_nfc::nfc::St25r3916Driver;
 using cap_nfc::nfc::St25r3916DriverConfig;
 using cap_nfc::nfc::St25r3916NfcAPollKind;
+using cap_nfc::nfc::St25r3916NfcFPollKind;
 using cap_nfc::nfc::St25r3916Transport;
 
 class FakeTransport final : public St25r3916Transport {
 public:
-    bool tagPresent             = true;
-    bool selectReceiveStartOnly = false;
-    bool wupaReceiveStartOnly   = false;
-    bool wupaRxError            = false;
-    bool wupaShortResponse      = false;
-    bool failHalt               = false;
-    bool boundaryTlv            = false;
-    bool reportTransmitterOn    = false;
-    std::size_t type2ReadCount  = 0;
-    std::size_t haltCount       = 0;
-    std::size_t fieldResetCount = 0;
-    std::size_t wupaWhileActive = 0;
+    bool tagPresent                               = true;
+    bool selectReceiveStartOnly                   = false;
+    bool wupaReceiveStartOnly                     = false;
+    bool wupaRxError                              = false;
+    bool wupaShortResponse                        = false;
+    bool failHalt                                 = false;
+    bool boundaryTlv                              = false;
+    bool reportTransmitterOn                      = false;
+    bool felicaTagPresent                         = false;
+    bool felicaReceiveStartOnly                   = false;
+    bool felicaNoResponseWithRxs                  = false;
+    bool felicaShortResponse                      = false;
+    bool felicaCollision                          = false;
+    bool felicaNoReceiveInterrupt                 = false;
+    bool felicaNoResponseInterrupts               = false;
+    bool felicaDelayResponseUntilSecondFifoStatus = false;
+    std::size_t type2ReadCount                    = 0;
+    std::size_t haltCount                         = 0;
+    std::size_t fieldResetCount                   = 0;
+    std::size_t wupaWhileActive                   = 0;
+    std::size_t sensfRequestCount                 = 0;
+    std::size_t felicaFifoStatusReads             = 0;
     std::vector<std::vector<uint8_t>> directCommands;
     std::vector<uint16_t> wupaTransmitLengths;
     std::vector<uint8_t> wupaIsoSettings;
+    std::vector<std::vector<uint8_t>> felicaRequests;
 
     FakeTransport()
     {
@@ -112,11 +124,12 @@ private:
     std::array<uint8_t, 64> _registers{};
     std::array<uint8_t, 64> _registersB{};
     std::vector<uint8_t> _fifo;
-    uint8_t _mainInterrupt    = 0;
-    uint8_t _timerInterrupt   = 0;
-    uint8_t _errorInterrupt   = 0;
-    uint8_t _passiveInterrupt = 0;
-    bool _tagActive           = false;
+    uint8_t _mainInterrupt      = 0;
+    uint8_t _timerInterrupt     = 0;
+    uint8_t _errorInterrupt     = 0;
+    uint8_t _passiveInterrupt   = 0;
+    bool _tagActive             = false;
+    bool _felicaResponsePending = false;
 
     void transferSpaceB(const uint8_t* transmit, uint8_t* receive, std::size_t size)
     {
@@ -137,6 +150,10 @@ private:
         for (std::size_t i = 0; i < size; ++i) {
             const uint8_t address = static_cast<uint8_t>((reg + i) & 0x3F);
             if (address == 0x1E) {
+                ++felicaFifoStatusReads;
+                if (_felicaResponsePending && felicaFifoStatusReads >= 2) {
+                    populateFelicaResponse();
+                }
                 values[i] = static_cast<uint8_t>(_fifo.size() & 0xFF);
             } else if (address == 0x1F) {
                 values[i] = static_cast<uint8_t>((_fifo.size() >> 2) & 0xC0);
@@ -261,6 +278,38 @@ private:
 
     void respondToFrame()
     {
+        if (_registers[0x03] == 0x1C && _fifo == std::vector<uint8_t>({0x00, 0xFF, 0xFF, 0x00, 0x03})) {
+            ++sensfRequestCount;
+            felicaRequests.push_back(_fifo);
+            if (felicaTagPresent) {
+                felicaFifoStatusReads = 0;
+                if (felicaDelayResponseUntilSecondFifoStatus) {
+                    _felicaResponsePending = true;
+                } else {
+                    populateFelicaResponse();
+                }
+                _mainInterrupt |= 0x08;  // TX end.
+                if (!felicaNoReceiveInterrupt) {
+                    if (felicaCollision) {
+                        _mainInterrupt |= 0x04;  // Collision.
+                    } else if (felicaReceiveStartOnly) {
+                        _mainInterrupt |= 0x20;  // RX start; RX end is omitted.
+                    } else {
+                        _mainInterrupt |= 0x10;  // RX end.
+                    }
+                }
+                if (felicaNoResponseWithRxs) {
+                    _timerInterrupt |= 0x40;  // NRE can be latched with RXS.
+                }
+            } else {
+                _felicaResponsePending = false;
+                if (!felicaNoResponseInterrupts) {
+                    _timerInterrupt |= 0x40;  // No response.
+                    _mainInterrupt |= 0x08;   // TX end still completes.
+                }
+            }
+            return;
+        }
         if (_fifo.size() == 2 && _fifo[0] == 0x50 && _fifo[1] == 0x00) {
             ++haltCount;
             if (failHalt) {
@@ -297,6 +346,16 @@ private:
             }
             _mainInterrupt |= 0x10;
         }
+    }
+
+    void populateFelicaResponse()
+    {
+        _fifo = {0x12, 0x01, 0x01, 0xFE, 0x12, 0x34, 0x56, 0x78, 0x9A,
+                 0xBC, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};
+        if (felicaShortResponse) {
+            _fifo.resize(8);
+        }
+        _felicaResponsePending = false;
     }
 };
 
@@ -485,6 +544,164 @@ void testBoundaryTlvDoesNotReadPastCapacity()
     require(poll.tag->ndefMessage.empty(), "malformed boundary TLV must not produce an NDEF message");
 }
 
+void testNfcFPollAndProtocolSwitch()
+{
+    std::atomic_bool cancelled{false};
+    CancellationToken cancellation(cancelled);
+    FakeTransport transport;
+    transport.felicaTagPresent = true;
+    St25r3916Driver driver(transport);
+
+    (void)driver.initialize(cancellation);
+    const auto poll = driver.pollNfcF(cancellation);
+    require(poll.kind == St25r3916NfcFPollKind::Tag && poll.tag, "expected an NFC-F tag");
+    const auto& tag = *poll.tag;
+    require(tag.idm == std::array<uint8_t, 8>({0x01, 0xFE, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC}), "NFC-F IDm mismatch");
+    require(tag.pmm == std::array<uint8_t, 8>({0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88}), "NFC-F PMm mismatch");
+    require(tag.typeName == "NFC-F / FeliCa (NFC Forum Type 3)", "NFC-F type name mismatch");
+    require(transport.registerValue(0x03) == 0x1C, "NFC-F initiator mode must be configured");
+    require(transport.registerValue(0x04) == 0x11, "NFC-F bitrate must be 212 kbps in both directions");
+    require(transport.registerValue(0x07) == 0x00, "FeliCa settings must be reset for polling");
+    require((transport.registerValue(0x12) & 0x02) != 0,
+            "NFC-F polling must keep the no-response timer running across receive slots");
+    require(transport.registerValue(0x0B) == 0x13 && transport.registerValue(0x0C) == 0x3D &&
+                transport.registerValue(0x0D) == 0x00 && transport.registerValue(0x0E) == 0x00,
+            "NFC-F receiver configuration mismatch");
+    require(transport.registerBValue(0x0C) == 0x54 && transport.registerBValue(0x0D) == 0x00,
+            "NFC-F correlator configuration mismatch");
+    require(transport.sensfRequestCount == 1, "expected one SENSF_REQ");
+    require(transport.felicaRequests.front() == std::vector<uint8_t>({0x00, 0xFF, 0xFF, 0x00, 0x03}),
+            "SENSF_REQ must omit the on-air length byte and request four time slots");
+
+    // Switching back to A must reapply the A profile rather than leaving the
+    // chip in FeliCa mode for the next discovery cycle.
+    transport.felicaTagPresent = false;
+    const auto aPoll           = driver.pollNfcA(cancellation);
+    require(aPoll.kind == St25r3916NfcAPollKind::Tag && aPoll.tag, "switching back to NFC-A must recover the tag");
+    require(transport.registerValue(0x03) == 0x08, "NFC-A mode must be restored after NFC-F polling");
+    require((transport.registerValue(0x12) & 0x02) == 0, "NFC-A mode must clear NFC-F's no-response timer handling");
+}
+
+void testNfcFNoTagClassification()
+{
+    std::atomic_bool cancelled{false};
+    CancellationToken cancellation(cancelled);
+    FakeTransport transport;
+    transport.felicaTagPresent = false;
+    St25r3916Driver driver(transport);
+    (void)driver.initialize(cancellation);
+
+    const auto poll = driver.pollNfcF(cancellation);
+    require(poll.kind == St25r3916NfcFPollKind::NoTag && !poll.tag,
+            "a clean NFC-F no-response interrupt must report explicit absence");
+}
+
+void testNfcFAcceptsCompleteFifoWithoutRxEnd()
+{
+    std::atomic_bool cancelled{false};
+    CancellationToken cancellation(cancelled);
+    FakeTransport transport;
+    transport.felicaTagPresent       = true;
+    transport.felicaReceiveStartOnly = true;
+    St25r3916Driver driver(transport);
+    (void)driver.initialize(cancellation);
+
+    const auto poll = driver.pollNfcF(cancellation);
+    require(poll.kind == St25r3916NfcFPollKind::Tag && poll.tag,
+            "a complete NFC-F FIFO response must be accepted even without RX end");
+}
+
+void testNfcFAcceptsCompleteFifoWhenNoResponseSharesRxStart()
+{
+    std::atomic_bool cancelled{false};
+    CancellationToken cancellation(cancelled);
+    FakeTransport transport;
+    transport.felicaTagPresent        = true;
+    transport.felicaReceiveStartOnly  = true;
+    transport.felicaNoResponseWithRxs = true;
+    St25r3916Driver driver(transport);
+    (void)driver.initialize(cancellation);
+
+    const auto poll = driver.pollNfcF(cancellation);
+    require(poll.kind == St25r3916NfcFPollKind::Tag && poll.tag,
+            "an NFC-F response with simultaneous NRE/RXS must not be discarded");
+}
+
+void testNfcFAcceptsCompleteFifoWithoutReceiveInterrupt()
+{
+    std::atomic_bool cancelled{false};
+    CancellationToken cancellation(cancelled);
+    FakeTransport transport;
+    transport.felicaTagPresent         = true;
+    transport.felicaNoReceiveInterrupt = true;
+    St25r3916Driver driver(transport);
+    (void)driver.initialize(cancellation);
+
+    const auto poll = driver.pollNfcF(cancellation);
+    require(poll.kind == St25r3916NfcFPollKind::Tag && poll.tag,
+            "a complete FIFO response must be accepted when RX interrupts are missing");
+}
+
+void testNfcFAcceptsResponseWhenFifoLagsRxEnd()
+{
+    std::atomic_bool cancelled{false};
+    CancellationToken cancellation(cancelled);
+    FakeTransport transport;
+    transport.felicaTagPresent                         = true;
+    transport.felicaDelayResponseUntilSecondFifoStatus = true;
+    St25r3916Driver driver(transport);
+    (void)driver.initialize(cancellation);
+
+    const auto poll = driver.pollNfcF(cancellation);
+    require(poll.kind == St25r3916NfcFPollKind::Tag && poll.tag,
+            "a FIFO response that arrives just after RX end must still be accepted");
+    require(transport.felicaFifoStatusReads >= 2, "the driver must perform a final FIFO status sample after RX end");
+}
+
+void testNfcFRejectsCollisionAsInconclusive()
+{
+    std::atomic_bool cancelled{false};
+    CancellationToken cancellation(cancelled);
+    FakeTransport transport;
+    transport.felicaTagPresent = true;
+    transport.felicaCollision  = true;
+    St25r3916Driver driver(transport);
+    (void)driver.initialize(cancellation);
+
+    const auto poll = driver.pollNfcF(cancellation);
+    require(poll.kind == St25r3916NfcFPollKind::Inconclusive && !poll.tag,
+            "a colliding NFC-F response must not be published as a tag");
+}
+
+void testNfcFRejectsShortResponse()
+{
+    std::atomic_bool cancelled{false};
+    CancellationToken cancellation(cancelled);
+    FakeTransport transport;
+    transport.felicaTagPresent    = true;
+    transport.felicaShortResponse = true;
+    St25r3916Driver driver(transport);
+    (void)driver.initialize(cancellation);
+
+    const auto poll = driver.pollNfcF(cancellation);
+    require(poll.kind == St25r3916NfcFPollKind::Inconclusive && !poll.tag,
+            "a short NFC-F response must remain inconclusive");
+}
+
+void testNfcFInfersNoTagWhenInterruptsAreMissing()
+{
+    std::atomic_bool cancelled{false};
+    CancellationToken cancellation(cancelled);
+    FakeTransport transport;
+    transport.felicaNoResponseInterrupts = true;
+    St25r3916Driver driver(transport);
+    (void)driver.initialize(cancellation);
+
+    const auto poll = driver.pollNfcF(cancellation);
+    require(poll.kind == St25r3916NfcFPollKind::NoTag && !poll.tag,
+            "an empty FIFO at the polling deadline must infer no tag when IRQs are lost");
+}
+
 }  // namespace
 
 int main()
@@ -496,6 +713,15 @@ int main()
         testWakeupClassification();
         testFailedHaltAndRemovalInvalidateState();
         testBoundaryTlvDoesNotReadPastCapacity();
+        testNfcFPollAndProtocolSwitch();
+        testNfcFNoTagClassification();
+        testNfcFAcceptsCompleteFifoWithoutRxEnd();
+        testNfcFAcceptsCompleteFifoWhenNoResponseSharesRxStart();
+        testNfcFAcceptsCompleteFifoWithoutReceiveInterrupt();
+        testNfcFAcceptsResponseWhenFifoLagsRxEnd();
+        testNfcFRejectsCollisionAsInconclusive();
+        testNfcFRejectsShortResponse();
+        testNfcFInfersNoTagWhenInterruptsAreMissing();
         std::cout << "ST25R3916 driver tests passed\n";
         return 0;
     } catch (const std::exception& exception) {

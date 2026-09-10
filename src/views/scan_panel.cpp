@@ -56,11 +56,10 @@ ScanPanel::ScanPanel(lv_obj_t* parent)
       _uid(std::make_unique<ui::TextLabel>(_root->raw_ptr(), "--", ui::Frame{146, 80 + kContentOffsetY, 162, 18},
                                            &lv_font_montserrat_12, 0xFFFFFF)),
       _type(std::make_unique<ui::TextLabel>(_root->raw_ptr(), "No tag detected",
-                                            ui::Frame{146, 101 + kContentOffsetY, 162, 17}, &lv_font_montserrat_10,
+                                            ui::Frame{146, kTypeBaseY, 162, LV_SIZE_CONTENT}, &lv_font_montserrat_10,
                                             0x9A9A9A)),
-      _summary(std::make_unique<ui::TextLabel>(_root->raw_ptr(), "INITIALIZING",
-                                               ui::Frame{146, 119 + kContentOffsetY, 162, 15}, &lv_font_montserrat_10,
-                                               0x63B3ED))
+      _summary(std::make_unique<ui::TextLabel>(_root->raw_ptr(), "INITIALIZING", ui::Frame{146, kSummaryBaseY, 162, 15},
+                                               &lv_font_montserrat_10, 0x63B3ED))
 {
     constexpr std::array<int32_t, 3> kRingSize = {78, 56, 34};
     for (std::size_t index = 0; index < _rings.size(); ++index) {
@@ -72,9 +71,11 @@ ScanPanel::ScanPanel(lv_obj_t* parent)
         _rings[index]->setBorderColor(lv_color_hex(0x63B3ED));
         _rings[index]->setOpa(static_cast<lv_opa_t>(120 - index * 20));
     }
-    _type->setLongMode(LV_LABEL_LONG_MODE_SCROLL);
-    _type->setSize(162, 17);
-    lv_obj_set_style_anim_duration(_type->raw_ptr(), lv_anim_speed(32), LV_PART_MAIN);
+    _type->setLongMode(LV_LABEL_LONG_MODE_WRAP);
+    _type->setWidth(162);
+    _type->setHeight(LV_SIZE_CONTENT);
+    lv_obj_set_style_min_height(_type->raw_ptr(), kTypeBaseHeight, LV_PART_MAIN);
+    updateTypeLayout();
     refresh();
 }
 
@@ -158,6 +159,7 @@ void ScanPanel::refresh()
         _uid->setText(nfc::bytesToHex(_session->snapshot.uid, compactUid ? "" : " "));
         _type->setText(_session->snapshot.typeName.empty() ? "Unknown tag type" : _session->snapshot.typeName);
         _summary->setText(recordSummary(*_session));
+        updateTypeLayout();
         return;
     }
 
@@ -169,8 +171,16 @@ void ScanPanel::refresh()
         _summary->setText("BACKEND NOT BUILT");
     } else {
         _type->setText(_status.state == nfc::ReaderState::Error ? "Reader initialization failed" : "No tag detected");
-        _summary->setText(_status.state == nfc::ReaderState::Error ? "RETRY REQUIRED" : "NFC-A READY");
+        _summary->setText(_status.state == nfc::ReaderState::Error ? "RETRY REQUIRED" : "NFC-A/F READY");
     }
+    updateTypeLayout();
+}
+
+void ScanPanel::updateTypeLayout()
+{
+    lv_obj_update_layout(_type->raw_ptr());
+    const int32_t typeHeight = std::max(kTypeBaseHeight, lv_obj_get_height(_type->raw_ptr()));
+    _summary->setY(kSummaryBaseY + typeHeight - kTypeBaseHeight);
 }
 
 }  // namespace cap_nfc

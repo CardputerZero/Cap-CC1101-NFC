@@ -22,6 +22,9 @@ public:
 private:
     static constexpr int32_t kViewportY      = 34;
     static constexpr int32_t kViewportHeight = 111;
+    static constexpr int32_t kRowStartY      = 2;
+    static constexpr int32_t kRowStep        = 22;
+    static constexpr int32_t kRowGap         = 4;
 
     std::unique_ptr<ui::Panel> _root;
     std::unique_ptr<ui::TextLabel> _title;
@@ -44,6 +47,7 @@ private:
     int32_t _applied_opacity = -1;
     bool _hidden             = false;
 
+    void layoutRows();
     void updateContentHeight();
     void applyScroll();
 };

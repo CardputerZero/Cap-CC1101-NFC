@@ -1,6 +1,7 @@
 #include "views/reader_info_panel.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <string>
 
@@ -35,7 +36,7 @@ ReaderInfoPanel::ReaderInfoPanel(lv_obj_t* parent)
       _status(std::make_unique<ui::StatusBadge>(_root->raw_ptr(), "STOPPED", 0x777B82)),
       _viewport(std::make_unique<ui::Panel>(_root->raw_ptr(), ui::Frame{0, kViewportY, 320, kViewportHeight})),
       _content(std::make_unique<ui::Panel>(_viewport->raw_ptr(), ui::Frame{0, 0, 320, kViewportHeight})),
-      _backend(std::make_unique<ui::InfoRow>(_content->raw_ptr(), 2, "BACKEND")),
+      _backend(std::make_unique<ui::InfoRow>(_content->raw_ptr(), kRowStartY, "BACKEND")),
       _chip(std::make_unique<ui::InfoRow>(_content->raw_ptr(), 24, "CHIP")),
       _transport(std::make_unique<ui::InfoRow>(_content->raw_ptr(), 46, "SPI")),
       _irq(std::make_unique<ui::InfoRow>(_content->raw_ptr(), 68, "IRQ")),
@@ -53,6 +54,13 @@ ReaderInfoPanel::ReaderInfoPanel(lv_obj_t* parent)
     _scroll.springOptions().visualDuration = 0.38F;
     _scroll.springOptions().bounce         = 0.0F;
     _scroll.teleport(0);
+    _backend->setValueAutoHeight();
+    _chip->setValueAutoHeight();
+    _transport->setValueAutoHeight();
+    _irq->setValueAutoHeight();
+    _power->setValueAutoHeight();
+    _protocols->setValueAutoHeight();
+    updateContentHeight();
 }
 
 void ReaderInfoPanel::setReaderStatus(const nfc::ReaderStatus& status)
@@ -112,8 +120,10 @@ void ReaderInfoPanel::tick(uint32_t nowMs)
 
 void ReaderInfoPanel::updateContentHeight()
 {
+    layoutRows();
     lv_obj_update_layout(_diagnostics->raw_ptr());
-    _content_height = std::max(kViewportHeight, 167 + lv_obj_get_height(_diagnostics->raw_ptr()) + 14);
+    const int32_t diagnosticsY = lv_obj_get_y(_diagnostics->raw_ptr());
+    _content_height = std::max(kViewportHeight, diagnosticsY + lv_obj_get_height(_diagnostics->raw_ptr()) + 14);
     _content->setHeight(_content_height);
     const float maximum = static_cast<float>(std::max(0, _content_height - kViewportHeight));
     if (_scroll_target > maximum) {
@@ -121,6 +131,23 @@ void ReaderInfoPanel::updateContentHeight()
         _scroll.move(_scroll_target);
     }
     applyScroll();
+}
+
+void ReaderInfoPanel::layoutRows()
+{
+    int32_t nextY                          = kRowStartY;
+    const std::array<ui::InfoRow*, 6> rows = {_backend.get(), _chip.get(),  _transport.get(),
+                                              _irq.get(),     _power.get(), _protocols.get()};
+    for (ui::InfoRow* row : rows) {
+        row->setY(nextY);
+        const int32_t valueHeight = std::max(kRowStep - kRowGap, row->valueHeight());
+        nextY += std::max(kRowStep, valueHeight + kRowGap);
+    }
+
+    const int32_t dividerY = nextY + 4;
+    _divider->setY(dividerY);
+    _diagnostics_caption->setY(dividerY + 10);
+    _diagnostics->setY(dividerY + 29);
 }
 
 void ReaderInfoPanel::applyScroll()

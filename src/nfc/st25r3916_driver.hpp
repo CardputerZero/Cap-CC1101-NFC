@@ -63,6 +63,23 @@ struct St25r3916NfcAPollResult {
     std::optional<St25r3916NfcATag> tag;
 };
 
+struct St25r3916NfcFTag {
+    std::array<uint8_t, 8> idm{};
+    std::array<uint8_t, 8> pmm{};
+    std::string typeName;
+};
+
+enum class St25r3916NfcFPollKind {
+    NoTag,
+    Inconclusive,
+    Tag,
+};
+
+struct St25r3916NfcFPollResult {
+    St25r3916NfcFPollKind kind = St25r3916NfcFPollKind::Inconclusive;
+    std::optional<St25r3916NfcFTag> tag;
+};
+
 struct St25r3916DriverConfig {
     bool misoPullWhenDeselected = true;
     bool misoPullWhenSelected   = true;
@@ -79,12 +96,20 @@ public:
     St25r3916ChipInfo initialize(const CancellationToken& cancellation);
     void startNfcA(const CancellationToken& cancellation);
     void stopNfcA() noexcept;
+    void startNfcF(const CancellationToken& cancellation);
+    void stopNfcF() noexcept;
     void stop() noexcept;
     St25r3916NfcAPollResult pollNfcA(const CancellationToken& cancellation);
+    St25r3916NfcFPollResult pollNfcF(const CancellationToken& cancellation);
     bool ready() const noexcept;
     bool discoveryEnabled() const noexcept;
 
 private:
+    enum class ActiveProtocol {
+        NfcA,
+        NfcF,
+    };
+
     enum class WakeupResult {
         NoTag,
         Inconclusive,
@@ -93,12 +118,14 @@ private:
 
     St25r3916Transport& _transport;
     St25r3916DriverConfig _config;
-    bool _ready                      = false;
-    bool _discovery_enabled          = false;
-    bool _field_reset_required       = false;
-    uint32_t _storedInterrupts       = 0;
-    std::size_t _failed_wakeups      = 0;
-    std::size_t _consecutive_no_tags = 0;
+    bool _ready                           = false;
+    bool _discovery_enabled               = false;
+    ActiveProtocol _active_protocol       = ActiveProtocol::NfcA;
+    bool _field_reset_required            = false;
+    uint32_t _storedInterrupts            = 0;
+    std::size_t _failed_wakeups           = 0;
+    std::size_t _consecutive_no_tags      = 0;
+    std::size_t _consecutive_nfcf_no_tags = 0;
     std::optional<St25r3916NfcATag> _cached_tag;
 
     std::vector<uint8_t> exchange(const std::vector<uint8_t>& transmit);
@@ -119,10 +146,13 @@ private:
     uint32_t readInterrupts();
     uint32_t waitForInterrupt(uint32_t flags, std::chrono::milliseconds timeout, const CancellationToken& cancellation);
     void configureNfcA(const CancellationToken& cancellation);
+    void configureNfcF(const CancellationToken& cancellation);
     void enableOscillator(const CancellationToken& cancellation);
     void enableField(const CancellationToken& cancellation);
     void resetNfcAField(const CancellationToken& cancellation);
+    void resetNfcFField(const CancellationToken& cancellation);
     void ensureNfcAField(const CancellationToken& cancellation);
+    void ensureNfcFField(const CancellationToken& cancellation);
     void prepareTransceive();
     void setNoResponseTimeout(std::chrono::milliseconds timeout);
     void logWakeupDiagnostics(uint32_t flags, const CancellationToken& cancellation);

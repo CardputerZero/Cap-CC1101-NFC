@@ -22,8 +22,14 @@ public:
     void tick(uint32_t nowMs);
 
 private:
-    static constexpr int32_t kViewportY      = 34;
-    static constexpr int32_t kViewportHeight = 111;
+    static constexpr int32_t kViewportY          = 34;
+    static constexpr int32_t kViewportHeight     = 111;
+    static constexpr int32_t kTypeRowY           = 68;
+    static constexpr int32_t kNdefRowY           = 90;
+    static constexpr int32_t kDividerY           = 116;
+    static constexpr int32_t kRecordsCaptionY    = 126;
+    static constexpr int32_t kRecordsY           = 145;
+    static constexpr int32_t kDefaultValueHeight = 18;
 
     std::unique_ptr<ui::Panel> _root;
     std::unique_ptr<ui::TextLabel> _title;
@@ -50,6 +56,7 @@ private:
 
     void refresh(const std::optional<nfc::TagSession>& session);
     void resetScroll();
+    void layoutRows();
     void updateContentHeight();
     void applyScroll();
 };

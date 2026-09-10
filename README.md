@@ -4,7 +4,7 @@ NFC tag reader for M5Stack CardputerZero and the ST25R3916 reader built into the
 
 ## Features
 
-- Detect NFC-A tags and show UID, ATQA, SAK, and tag type
+- Detect NFC-A tags (UID, ATQA, SAK) and NFC-F/FeliCa tags (IDm and tag type)
 - Read Text and URI NDEF records from supported Type 2 tags
 - Track tag presentation and removal for the current session
 - Show reader, transport, IRQ, power, and protocol diagnostics
@@ -85,8 +85,9 @@ The current BSP may fail to apply the overlay at runtime. If initialization
 still reports a missing SPI node after loading, reboot once with
 `dtoverlay=spi0-spidev2-gpio22-overlay` in `/boot/firmware/config.txt`.
 
-The first release supports NFC-A UID discovery and Type 2 NDEF reading. Type 4
-NDEF and NFC-B/F/V discovery are not implemented.
+The current implementation supports NFC-A UID discovery, NFC-F/FeliCa IDm
+discovery (NFC Forum Type 3), and Type 2 NDEF reading on NFC-A. NFC-A Type 4
+NDEF, NFC-B, and NFC-V discovery are not implemented.
 
 ## Package
 

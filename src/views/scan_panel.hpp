@@ -20,6 +20,10 @@ public:
     void tick(uint32_t nowMs);
 
 private:
+    static constexpr int32_t kTypeBaseY      = 101 + 7;
+    static constexpr int32_t kTypeBaseHeight = 17;
+    static constexpr int32_t kSummaryBaseY   = 119 + 7;
+
     std::unique_ptr<ui::Panel> _root;
     std::unique_ptr<ui::TextLabel> _title;
     std::unique_ptr<ui::StatusBadge> _status_badge;
@@ -37,6 +41,7 @@ private:
     bool _hidden             = false;
 
     void refresh();
+    void updateTypeLayout();
 };
 
 }  // namespace cap_nfc

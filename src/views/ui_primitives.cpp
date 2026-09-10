@@ -69,6 +69,25 @@ void InfoRow::setValueColor(uint32_t color)
     _value->setTextColor(lv_color_hex(color));
 }
 
+void InfoRow::setY(int32_t y)
+{
+    _caption->setY(y);
+    _value->setY(y - 1);
+}
+
+void InfoRow::setValueAutoHeight()
+{
+    // Keep the original single-line row height while allowing wrapped values to grow.
+    lv_obj_set_style_min_height(_value->raw_ptr(), 18, LV_PART_MAIN);
+    _value->setHeight(LV_SIZE_CONTENT);
+}
+
+int32_t InfoRow::valueHeight()
+{
+    lv_obj_update_layout(_value->raw_ptr());
+    return lv_obj_get_height(_value->raw_ptr());
+}
+
 StatusBadge::StatusBadge(lv_obj_t* parent, std::string_view text, uint32_t color)
     : _dot(std::make_unique<Panel>(parent, Frame{0, 0, 5, 5}, color, LV_OPA_COVER, LV_RADIUS_CIRCLE)),
       _label(

@@ -39,6 +39,9 @@ public:
 
     void setValue(std::string_view value);
     void setValueColor(uint32_t color);
+    void setY(int32_t y);
+    void setValueAutoHeight();
+    int32_t valueHeight();
 
 private:
     std::unique_ptr<TextLabel> _caption;

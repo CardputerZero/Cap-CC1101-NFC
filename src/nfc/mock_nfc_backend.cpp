@@ -62,11 +62,14 @@ TagSnapshot makeTextTag()
 TagSnapshot makeUriTag()
 {
     TagSnapshot tag;
-    tag.technology    = TagTechnology::NfcA;
-    tag.uid           = {0x04, 0x73, 0x2B, 0x1A, 0x9C, 0x72, 0x81};
-    tag.atqa          = {0x03, 0x44};
-    tag.sak           = 0x20;
-    tag.typeName      = "Type 4 / ISO-DEP";
+    tag.technology = TagTechnology::NfcA;
+    tag.uid        = {0x04, 0x73, 0x2B, 0x1A, 0x9C, 0x72, 0x81};
+    tag.atqa       = {0x03, 0x44};
+    tag.sak        = 0x20;
+    // Keep the desktop scenario representative of the long label produced by
+    // the hardware SAK classifier. This exercises the same wrapping path as a
+    // real ISO-DEP (Type 4-compatible) tag.
+    tag.typeName      = "NFC-A / ISO-DEP (Type 4-compatible)";
     tag.ndefSupported = true;
     tag.ndefReadable  = true;
     tag.ndefCapacity  = 512;

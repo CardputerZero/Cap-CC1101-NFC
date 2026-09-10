@@ -66,13 +66,14 @@ TagDetailPanel::TagDetailPanel(lv_obj_t* parent)
       _technology(std::make_unique<ui::InfoRow>(_content->raw_ptr(), 2, "TECH")),
       _uid(std::make_unique<ui::InfoRow>(_content->raw_ptr(), 24, "UID")),
       _atqa_sak(std::make_unique<ui::InfoRow>(_content->raw_ptr(), 46, "ATQA / SAK")),
-      _type(std::make_unique<ui::InfoRow>(_content->raw_ptr(), 68, "TYPE")),
-      _ndef(std::make_unique<ui::InfoRow>(_content->raw_ptr(), 90, "NDEF")),
-      _divider(std::make_unique<ui::Panel>(_content->raw_ptr(), ui::Frame{14, 116, 292, 1}, 0x2A2C30, LV_OPA_COVER)),
-      _records_caption(std::make_unique<ui::TextLabel>(_content->raw_ptr(), "RECORDS", ui::Frame{14, 126, 100, 14},
-                                                       &lv_font_montserrat_10, 0x777B82)),
+      _type(std::make_unique<ui::InfoRow>(_content->raw_ptr(), kTypeRowY, "TYPE")),
+      _ndef(std::make_unique<ui::InfoRow>(_content->raw_ptr(), kNdefRowY, "NDEF")),
+      _divider(
+          std::make_unique<ui::Panel>(_content->raw_ptr(), ui::Frame{14, kDividerY, 292, 1}, 0x2A2C30, LV_OPA_COVER)),
+      _records_caption(std::make_unique<ui::TextLabel>(
+          _content->raw_ptr(), "RECORDS", ui::Frame{14, kRecordsCaptionY, 100, 14}, &lv_font_montserrat_10, 0x777B82)),
       _records(std::make_unique<ui::TextLabel>(_content->raw_ptr(), "No tag data",
-                                               ui::Frame{14, 145, 292, LV_SIZE_CONTENT}, &lv_font_montserrat_12,
+                                               ui::Frame{14, kRecordsY, 292, LV_SIZE_CONTENT}, &lv_font_montserrat_12,
                                                0xE4E4E4)),
       _scrollbar(
           std::make_unique<ui::ScrollBar>(_root->raw_ptr(), ui::Frame{314, kViewportY + 4, 3, kViewportHeight - 8}))
@@ -80,6 +81,7 @@ TagDetailPanel::TagDetailPanel(lv_obj_t* parent)
     _scroll.springOptions().visualDuration = 0.38F;
     _scroll.springOptions().bounce         = 0.0F;
     _scroll.teleport(0);
+    _type->setValueAutoHeight();
     refresh(std::nullopt);
 }
 
@@ -171,8 +173,10 @@ void TagDetailPanel::refresh(const std::optional<nfc::TagSession>& session)
 
 void TagDetailPanel::updateContentHeight()
 {
+    layoutRows();
     lv_obj_update_layout(_records->raw_ptr());
-    _content_height = std::max(kViewportHeight, 145 + lv_obj_get_height(_records->raw_ptr()) + 14);
+    const int32_t recordsY = lv_obj_get_y(_records->raw_ptr());
+    _content_height        = std::max(kViewportHeight, recordsY + lv_obj_get_height(_records->raw_ptr()) + 14);
     _content->setHeight(_content_height);
     const float maximum = static_cast<float>(std::max(0, _content_height - kViewportHeight));
     if (_scroll_target > maximum) {
@@ -180,6 +184,17 @@ void TagDetailPanel::updateContentHeight()
         _scroll.move(_scroll_target);
     }
     applyScroll();
+}
+
+void TagDetailPanel::layoutRows()
+{
+    const int32_t typeHeight = std::max(kDefaultValueHeight, _type->valueHeight());
+    const int32_t typeExtra  = typeHeight - kDefaultValueHeight;
+
+    _ndef->setY(kNdefRowY + typeExtra);
+    _divider->setY(kDividerY + typeExtra);
+    _records_caption->setY(kRecordsCaptionY + typeExtra);
+    _records->setY(kRecordsY + typeExtra);
 }
 
 void TagDetailPanel::resetScroll()

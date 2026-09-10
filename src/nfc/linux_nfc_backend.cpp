@@ -172,7 +172,7 @@ public:
             spiConfig.no_kernel_cs  = false;
             _spi.open(spiConfig);
 
-            stage      = "ST25R3916 probe and NFC-A setup";
+            stage      = "ST25R3916 probe and NFC-A/F setup";
             _transport = std::make_unique<LinuxSt25r3916Transport>(_spi, *_interrupt);
             St25r3916DriverConfig driverConfig;
             driverConfig.misoPullWhenDeselected = (_config.misoPullMode & 0x01) != 0;
@@ -188,7 +188,7 @@ public:
                 _config.spiDevice + " mode 1 @ " + std::to_string(_config.spiSpeedHz) + " Hz / kernel CS2 GPIO22";
             info.irq       = _config.gpioChip + ":" + std::to_string(_config.irqGpio) + " rising edge";
             info.power     = "ext_5v_out + GPIO26 POWER_EN";
-            info.protocols = "NFC-A UID / Type 2 NDEF (bring-up)";
+            info.protocols = "NFC-A / NFC-F UID; Type 2 NDEF for NFC-A";
             info.mock      = false;
             _open          = true;
 
@@ -223,9 +223,16 @@ public:
     {
         cancellation.throwIfCancellationRequested();
         requireOpen();
-        _driver->startNfcA(cancellation);
-        _scanning = true;
-        spdlog::info("NFC backend: NFC-A discovery active");
+        // Start in FeliCa mode so a phone that exposes more than one NFC
+        // technology is classified by its NFC-F response first.
+        _driver->startNfcF(cancellation);
+        _probe_protocol          = DiscoveryProtocol::NfcF;
+        _locked_protocol         = LockedProtocol::None;
+        _locked_no_tag_count     = 0;
+        _nfcf_clean_no_tag_count = 0;
+        _nfcf_inconclusive_count = 0;
+        _scanning                = true;
+        spdlog::info("NFC backend: NFC-F/NFC-A discovery active (FeliCa preferred)");
     }
 
     void stopDiscovery() noexcept override
@@ -233,8 +240,13 @@ public:
         if (_driver) {
             _driver->stopNfcA();
         }
-        _scanning = false;
-        spdlog::info("NFC backend: NFC-A discovery stopped and RF field disabled");
+        _scanning                = false;
+        _probe_protocol          = DiscoveryProtocol::NfcF;
+        _locked_protocol         = LockedProtocol::None;
+        _locked_no_tag_count     = 0;
+        _nfcf_clean_no_tag_count = 0;
+        _nfcf_inconclusive_count = 0;
+        spdlog::info("NFC backend: NFC-A/NFC-F discovery stopped and RF field disabled");
     }
 
     DiscoveryPollResult pollDiscovery(std::chrono::milliseconds timeout, const CancellationToken& cancellation) override
@@ -246,45 +258,224 @@ public:
             return {};
         }
 
-        auto observed = _driver->pollNfcA(cancellation);
-        if (observed.kind == St25r3916NfcAPollKind::NoTag) {
-            return {DiscoveryPollKind::NoTag, std::nullopt};
-        }
-        if (observed.kind != St25r3916NfcAPollKind::Tag || !observed.tag) {
-            return {DiscoveryPollKind::NoObservation, std::nullopt};
+        const auto pollF = [&]() {
+            const auto observed = _driver->pollNfcF(cancellation);
+            if (observed.kind == St25r3916NfcFPollKind::Tag && observed.tag) {
+                const St25r3916NfcFTag& tag = *observed.tag;
+                TagSnapshot snapshot;
+                snapshot.technology = TagTechnology::NfcF;
+                snapshot.uid        = {tag.idm.begin(), tag.idm.end()};
+                snapshot.typeName   = tag.typeName;
+                spdlog::debug("NFC backend: NFC-F tag detected (IDm={})", bytesToHex(snapshot.uid));
+                return DiscoveryPollResult{DiscoveryPollKind::Tag, std::move(snapshot)};
+            }
+            if (observed.kind == St25r3916NfcFPollKind::NoTag) {
+                return DiscoveryPollResult{DiscoveryPollKind::NoTag, std::nullopt};
+            }
+            return DiscoveryPollResult{DiscoveryPollKind::NoObservation, std::nullopt};
+        };
+
+        const auto pollA = [&]() {
+            auto observed = _driver->pollNfcA(cancellation);
+            if (observed.kind == St25r3916NfcAPollKind::Tag && observed.tag) {
+                St25r3916NfcATag& tag = *observed.tag;
+                TagSnapshot snapshot;
+                snapshot.technology    = TagTechnology::NfcA;
+                snapshot.uid           = std::move(tag.uid);
+                snapshot.atqa          = {tag.atqa.begin(), tag.atqa.end()};
+                snapshot.sak           = tag.sak;
+                snapshot.typeName      = std::move(tag.typeName);
+                snapshot.ndefSupported = tag.ndefSupported;
+                snapshot.ndefReadable  = tag.ndefReadable;
+                snapshot.ndefCapacity  = tag.ndefCapacity;
+                if (!tag.ndefMessage.empty()) {
+                    NdefParseResult parsed = parseNdefMessage(tag.ndefMessage);
+                    if (parsed) {
+                        snapshot.records = std::move(parsed.records);
+                    } else {
+                        spdlog::warn("NFC backend: NDEF bytes from UID {} could not be parsed: {}",
+                                     bytesToHex(snapshot.uid), parsed.error);
+                    }
+                }
+                spdlog::debug("NFC backend: NFC-A tag detected (UID={})", bytesToHex(snapshot.uid));
+                return DiscoveryPollResult{DiscoveryPollKind::Tag, std::move(snapshot)};
+            }
+            if (observed.kind == St25r3916NfcAPollKind::NoTag) {
+                return DiscoveryPollResult{DiscoveryPollKind::NoTag, std::nullopt};
+            }
+            return DiscoveryPollResult{DiscoveryPollKind::NoObservation, std::nullopt};
+        };
+
+        const auto pollProtocol = [&](DiscoveryProtocol protocol) {
+            return protocol == DiscoveryProtocol::NfcF ? pollF() : pollA();
+        };
+
+        const auto lockProtocol = [&](DiscoveryProtocol protocol, DiscoveryPollResult result) {
+            _locked_protocol     = protocol == DiscoveryProtocol::NfcF ? LockedProtocol::NfcF : LockedProtocol::NfcA;
+            _probe_protocol      = protocol;
+            _locked_no_tag_count = 0;
+            _nfcf_clean_no_tag_count = 0;
+            _nfcf_inconclusive_count = 0;
+            return result;
+        };
+
+        // A bounded escape hatch for a noisy FeliCa exchange. One or two
+        // incomplete responses are common on translated SPI/IRQ buses, so F
+        // remains preferred for those polls. Repeated incompletes can also be
+        // caused by an NFC-A card or a stale field, however; probe A once so
+        // that an NFC-A tag cannot be hidden behind a permanent F lock.
+        const auto fallbackToA = [&]() {
+            const DiscoveryPollResult result = pollA();
+            if (result.kind == DiscoveryPollKind::Tag) {
+                return lockProtocol(DiscoveryProtocol::NfcA, result);
+            }
+            _probe_protocol          = DiscoveryProtocol::NfcF;
+            _locked_no_tag_count     = 0;
+            _nfcf_clean_no_tag_count = 0;
+            _nfcf_inconclusive_count = 0;
+            return result;
+        };
+
+        // Keep the selected protocol while a tag remains present. Switching
+        // modes on every cycle can interrupt Type 2 reads and makes a card
+        // appear to flicker between technologies.
+        if (_locked_protocol != LockedProtocol::None) {
+            const DiscoveryProtocol protocol =
+                _locked_protocol == LockedProtocol::NfcF ? DiscoveryProtocol::NfcF : DiscoveryProtocol::NfcA;
+            const DiscoveryPollResult result = pollProtocol(protocol);
+            if (result.kind == DiscoveryPollKind::Tag) {
+                _locked_no_tag_count     = 0;
+                _nfcf_clean_no_tag_count = 0;
+                _nfcf_inconclusive_count = 0;
+                return result;
+            }
+            if (result.kind == DiscoveryPollKind::NoObservation) {
+                _locked_no_tag_count     = 0;
+                _nfcf_clean_no_tag_count = 0;
+                if (protocol == DiscoveryProtocol::NfcF) {
+                    ++_nfcf_inconclusive_count;
+                    if (_nfcf_inconclusive_count >= kNfcFInconclusiveFallbackThreshold) {
+                        spdlog::warn(
+                            "NFC backend: locked NFC-F produced {} consecutive incomplete polls; probing NFC-A",
+                            _nfcf_inconclusive_count);
+                        _locked_protocol = LockedProtocol::None;
+                        return fallbackToA();
+                    }
+                }
+                // A noisy/incomplete exchange does not prove that the tag
+                // was removed. Keep the protocol lock and restart the clean
+                // absence debounce window until the bounded fallback above.
+                return result;
+            }
+            if (result.kind == DiscoveryPollKind::NoTag) {
+                _nfcf_inconclusive_count = 0;
+                ++_locked_no_tag_count;
+                if (_locked_no_tag_count < kLockedNoTagThreshold) {
+                    spdlog::debug("NFC backend: locked {} poll reports no tag ({}/{}); retaining protocol lock",
+                                  protocolName(protocol), _locked_no_tag_count, kLockedNoTagThreshold);
+                    return result;
+                }
+                spdlog::debug("NFC backend: locked {} protocol released after {} clean no-tag polls",
+                              protocolName(protocol), kLockedNoTagThreshold);
+                _locked_protocol         = LockedProtocol::None;
+                _probe_protocol          = DiscoveryProtocol::NfcF;
+                _locked_no_tag_count     = 0;
+                _nfcf_clean_no_tag_count = 0;
+                _nfcf_inconclusive_count = 0;
+            }
+            return result;
         }
 
-        St25r3916NfcATag& tag = *observed.tag;
-        TagSnapshot snapshot;
-        snapshot.technology    = TagTechnology::NfcA;
-        snapshot.uid           = std::move(tag.uid);
-        snapshot.atqa          = {tag.atqa.begin(), tag.atqa.end()};
-        snapshot.sak           = tag.sak;
-        snapshot.typeName      = std::move(tag.typeName);
-        snapshot.ndefSupported = tag.ndefSupported;
-        snapshot.ndefReadable  = tag.ndefReadable;
-        snapshot.ndefCapacity  = tag.ndefCapacity;
-        if (!tag.ndefMessage.empty()) {
-            NdefParseResult parsed = parseNdefMessage(tag.ndefMessage);
-            if (parsed) {
-                snapshot.records = std::move(parsed.records);
-            } else {
-                spdlog::warn("NFC backend: NDEF bytes from UID {} could not be parsed: {}", bytesToHex(snapshot.uid),
-                             parsed.error);
+        const DiscoveryProtocol first = _probe_protocol;
+        const DiscoveryProtocol second =
+            first == DiscoveryProtocol::NfcF ? DiscoveryProtocol::NfcA : DiscoveryProtocol::NfcF;
+        const DiscoveryPollResult firstResult = pollProtocol(first);
+        if (firstResult.kind == DiscoveryPollKind::Tag) {
+            return lockProtocol(first, firstResult);
+        }
+
+        // A partial/colliding NFC-F exchange is evidence that a tag is in the
+        // field, but not enough evidence to publish an IDm. Do not immediately
+        // run NFC-A in that case: an NFC-F phone can otherwise be misreported
+        // as NFC-A when its FeliCa response is received on the next edge.
+        if (first == DiscoveryProtocol::NfcF && firstResult.kind == DiscoveryPollKind::NoObservation) {
+            ++_nfcf_inconclusive_count;
+            if (_nfcf_inconclusive_count < kNfcFInconclusiveFallbackThreshold) {
+                _probe_protocol          = DiscoveryProtocol::NfcF;
+                _nfcf_clean_no_tag_count = 0;
+                return firstResult;
+            }
+            spdlog::warn("NFC backend: NFC-F produced {} consecutive incomplete polls; probing NFC-A",
+                         _nfcf_inconclusive_count);
+            return fallbackToA();
+        }
+
+        // Require two clean NFC-F no-response polls before probing NFC-A.
+        // A FeliCa phone can answer just after the first timeout; switching
+        // immediately would let a noisy NFC-A interpretation win that race.
+        if (first == DiscoveryProtocol::NfcF && firstResult.kind == DiscoveryPollKind::NoTag) {
+            _nfcf_inconclusive_count = 0;
+            ++_nfcf_clean_no_tag_count;
+            if (_nfcf_clean_no_tag_count < kNfcFCleanNoTagThreshold) {
+                spdlog::debug("NFC backend: NFC-F clean no-tag poll ({}/{}); delaying NFC-A probe",
+                              _nfcf_clean_no_tag_count, kNfcFCleanNoTagThreshold);
+                return firstResult;
             }
         }
-        return {DiscoveryPollKind::Tag, std::move(snapshot)};
+
+        // A clean NFC-F no-response is the only case in which it is safe to
+        // try the other mode. Receive activity was handled above so a noisy
+        // FeliCa exchange cannot hide an NFC-F phone as NFC-A.
+        const DiscoveryPollResult secondResult = pollProtocol(second);
+        if (secondResult.kind == DiscoveryPollKind::Tag) {
+            return lockProtocol(second, secondResult);
+        }
+
+        _probe_protocol          = DiscoveryProtocol::NfcF;
+        _locked_no_tag_count     = 0;
+        _nfcf_clean_no_tag_count = 0;
+        _nfcf_inconclusive_count = 0;
+        if (firstResult.kind == DiscoveryPollKind::NoObservation ||
+            secondResult.kind == DiscoveryPollKind::NoObservation) {
+            return {DiscoveryPollKind::NoObservation, std::nullopt};
+        }
+        return {DiscoveryPollKind::NoTag, std::nullopt};
     }
 
 private:
+    static constexpr std::size_t kLockedNoTagThreshold              = 3;
+    static constexpr std::size_t kNfcFCleanNoTagThreshold           = 2;
+    static constexpr std::size_t kNfcFInconclusiveFallbackThreshold = 3;
+
+    enum class DiscoveryProtocol {
+        NfcF,
+        NfcA,
+    };
+
+    enum class LockedProtocol {
+        None,
+        NfcF,
+        NfcA,
+    };
+
     LinuxBackendConfig _config;
     hal::CardputerZeroCapPower _power;
     hal::LinuxSpiDevice _spi;
     std::unique_ptr<hal::LinuxGpioLine> _interrupt;
     std::unique_ptr<LinuxSt25r3916Transport> _transport;
     std::unique_ptr<St25r3916Driver> _driver;
-    bool _open     = false;
-    bool _scanning = false;
+    bool _open                           = false;
+    bool _scanning                       = false;
+    DiscoveryProtocol _probe_protocol    = DiscoveryProtocol::NfcF;
+    LockedProtocol _locked_protocol      = LockedProtocol::None;
+    std::size_t _locked_no_tag_count     = 0;
+    std::size_t _nfcf_clean_no_tag_count = 0;
+    std::size_t _nfcf_inconclusive_count = 0;
+
+    static const char* protocolName(DiscoveryProtocol protocol) noexcept
+    {
+        return protocol == DiscoveryProtocol::NfcF ? "NFC-F" : "NFC-A";
+    }
 
     void closeImpl(bool graceful) noexcept
     {
@@ -293,7 +484,12 @@ private:
             spdlog::info("NFC backend: closing resources (mode={})", graceful ? "graceful" : "immediate");
         }
 
-        _scanning = false;
+        _scanning                = false;
+        _probe_protocol          = DiscoveryProtocol::NfcF;
+        _locked_protocol         = LockedProtocol::None;
+        _locked_no_tag_count     = 0;
+        _nfcf_clean_no_tag_count = 0;
+        _nfcf_inconclusive_count = 0;
         if (_driver) {
             if (graceful) {
                 spdlog::info("NFC backend: disabling RF field through ST25R3916");
