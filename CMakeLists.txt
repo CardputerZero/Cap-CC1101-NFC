@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(M5CardputerZeroCapCC1101NFC VERSION 0.1.3 LANGUAGES C CXX ASM)
+project(M5CardputerZeroCapCC1101NFC VERSION 0.1.4 LANGUAGES C CXX ASM)
 
 option(CAP_NFC_USE_SDL "Use LVGL's SDL backend and mock NFC reader" ON)
 option(BUILD_TESTING "Build Cap-CC1101-NFC tests" OFF)

@@ -1,4 +1,5 @@
 #include "input/nfc_keypad.hpp"
+#include "core/nfc_types.hpp"
 
 #include <spdlog/spdlog.h>
 #include <cstdio>
@@ -42,9 +43,10 @@ bool hasAppKeys(int fd)
            testBit(key_bits, KEY_RIGHT) || testBit(key_bits, KEY_F) || testBit(key_bits, KEY_X) ||
            testBit(key_bits, KEY_Z) || testBit(key_bits, KEY_C) || testBit(key_bits, KEY_SPACE) ||
            testBit(key_bits, KEY_A) || testBit(key_bits, KEY_BACKSPACE) || testBit(key_bits, KEY_0) ||
-           testBit(key_bits, KEY_TAB) || testBit(key_bits, KEY_1) || testBit(key_bits, KEY_2) ||
-           testBit(key_bits, KEY_3) || testBit(key_bits, KEY_4) || testBit(key_bits, KEY_5) ||
-           testBit(key_bits, KEY_6) || testBit(key_bits, KEY_7) || testBit(key_bits, KEY_8) || testBit(key_bits, KEY_9);
+           testBit(key_bits, KEY_TAB) || testBit(key_bits, KEY_HELP) || testBit(key_bits, KEY_1) ||
+           testBit(key_bits, KEY_2) || testBit(key_bits, KEY_3) || testBit(key_bits, KEY_4) ||
+           testBit(key_bits, KEY_5) || testBit(key_bits, KEY_6) || testBit(key_bits, KEY_7) ||
+           testBit(key_bits, KEY_8) || testBit(key_bits, KEY_9);
 }
 
 bool envEnabled(const char* name, bool fallback)
@@ -349,6 +351,8 @@ uint32_t NfcKeypad::translateKey(uint16_t code) const
             return LV_KEY_LEFT;
         case KEY_RIGHT:
             return LV_KEY_RIGHT;
+        case KEY_HELP:
+            return nfc_key::Help;
         case KEY_A:
             return shifted ? 'A' : 'a';
         case KEY_B:

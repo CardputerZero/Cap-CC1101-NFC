@@ -64,6 +64,7 @@ Key controls:
 - Enter: open tag details or retry reader initialization
 - `R`: retry initialization from Reader Info
 - Esc: return to Scan, close a dialog, or exit
+- Fn+H (desktop: H): open or close Help; Esc also closes Help
 
 Set `NFC_MOCK_SCENARIO` to `empty`, `text`, `uri`, or `cycle` to select the
 desktop mock data.

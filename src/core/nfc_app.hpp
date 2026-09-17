@@ -3,11 +3,13 @@
 #include "core/nfc_router.hpp"
 #include "models/nfc_model.hpp"
 #include "view_models/nfc_view_model.hpp"
+#include "views/help_view.hpp"
 #include "views/nfc_view.hpp"
 #include "views/view.hpp"
 
 #include <array>
 #include <lvgl.h>
+#include <memory>
 
 namespace cap_nfc {
 
@@ -35,12 +37,14 @@ private:
     NfcModel _model;
     NfcViewModel _nfc_vm;
     NfcView _nfc_view;
+    std::unique_ptr<HelpView> _help_view;
     ViewModel* _current_vm    = nullptr;
     View* _current_view       = nullptr;
     lv_group_t* _input_group  = nullptr;
     size_t _route_observer_id = 0;
     bool _quit_requested      = false;
     bool _started             = false;
+    bool _help_pressed        = false;
 
     std::array<ViewModel*, static_cast<size_t>(PageId::Count)> _view_models;
     std::array<View*, static_cast<size_t>(PageId::Count)> _views;

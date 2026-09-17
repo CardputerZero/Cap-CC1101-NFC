@@ -2,8 +2,21 @@
 
 #include <spdlog/spdlog.h>
 
+#if LV_USE_SDL
+#include <SDL2/SDL.h>
+#endif
+
 namespace cap_nfc {
 namespace {
+
+#if LV_USE_SDL
+bool sdlHelpKeyHeld()
+{
+    int keyCount       = 0;
+    const Uint8* state = SDL_GetKeyboardState(&keyCount);
+    return state && static_cast<int>(SDL_SCANCODE_H) < keyCount && state[SDL_SCANCODE_H] != 0;
+}
+#endif
 
 bool isTextKey(const char* utf8, char expectedLowercase)
 {
@@ -33,8 +46,10 @@ void NfcApp::start()
     spdlog::info("NfcApp: start");
     _started        = true;
     _quit_requested = false;
+    _help_pressed   = false;
     lv_obj_set_style_bg_color(lv_screen_active(), lv_color_hex(0x000000), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(lv_screen_active(), LV_OPA_COVER, LV_PART_MAIN);
+    _help_view = std::make_unique<HelpView>(lv_screen_active());
     setupInputGroup();
     _model.start();
     _route_observer_id = _router.currentPage().observe(this, onRouteChanged);
@@ -48,6 +63,9 @@ void NfcApp::stop()
     }
 
     spdlog::info("NfcApp: stopping NFC model");
+    if (_help_view) {
+        _help_view->hide();
+    }
     _model.stop();
     spdlog::info("NfcApp: NFC model stopped; releasing UI");
 
@@ -63,6 +81,7 @@ void NfcApp::stop()
         _current_vm->onExit();
         _current_vm = nullptr;
     }
+    _help_view.reset();
     if (_input_group) {
 #if LV_USE_SDL
         lv_indev_t* inputDevice = lv_indev_get_next(nullptr);
@@ -76,12 +95,25 @@ void NfcApp::stop()
         lv_group_del(_input_group);
         _input_group = nullptr;
     }
-    _started = false;
+    _started      = false;
+    _help_pressed = false;
     spdlog::info("NfcApp: stop complete");
 }
 
 void NfcApp::onKey(uint32_t key)
 {
+    if (key == nfc_key::Help && _help_view) {
+        _help_view->toggle();
+        return;
+    }
+
+    if (_help_view && _help_view->visible()) {
+        if (key == '\x1b') {
+            _help_view->hide();
+        }
+        return;
+    }
+
     if (key == '\x1b' && _router.page() == PageId::Nfc && _nfc_vm.atRoot() && !_nfc_vm.modalActive()) {
         spdlog::info("NfcApp: quit requested");
         _quit_requested = true;
@@ -95,6 +127,24 @@ void NfcApp::onKey(uint32_t key)
 
 bool NfcApp::onLvglKeyState(uint32_t lvKey, const char* utf8, bool pressed)
 {
+#if LV_USE_SDL
+    const bool desktopHelp = isTextKey(utf8, 'h');
+#else
+    const bool desktopHelp = false;
+#endif
+    if (lvKey == nfc_key::Help || desktopHelp) {
+#if LV_USE_SDL
+        if (!pressed && desktopHelp && sdlHelpKeyHeld()) {
+            return true;
+        }
+#endif
+        if (pressed && !_help_pressed) {
+            onKey(nfc_key::Help);
+        }
+        _help_pressed = pressed;
+        return true;
+    }
+
     if (!pressed) {
         return true;
     }
@@ -140,6 +190,11 @@ bool NfcApp::onLvglKeyState(uint32_t lvKey, const char* utf8, bool pressed)
 
 void NfcApp::tick(uint32_t nowMs)
 {
+#if LV_USE_SDL
+    if (_help_pressed && !sdlHelpKeyHeld()) {
+        _help_pressed = false;
+    }
+#endif
     _model.tick(nowMs);
     if (_current_vm) {
         _current_vm->tick(nowMs);
@@ -178,6 +233,7 @@ void NfcApp::setupInputGroup()
             lv_indev_set_group(inputDevice, _input_group);
 #if LV_USE_SDL
             lv_indev_add_event_cb(inputDevice, onKeyboardEvent, LV_EVENT_KEY, this);
+            lv_indev_add_event_cb(inputDevice, onKeyboardEvent, LV_EVENT_RELEASED, this);
 #endif
         }
         inputDevice = lv_indev_get_next(inputDevice);
@@ -218,7 +274,7 @@ void NfcApp::onKeyboardEvent(lv_event_t* event)
 {
     auto* self        = static_cast<NfcApp*>(lv_event_get_user_data(event));
     auto* inputDevice = static_cast<lv_indev_t*>(lv_event_get_target(event));
-    if (!self || !inputDevice || lv_indev_get_state(inputDevice) != LV_INDEV_STATE_PRESSED) {
+    if (!self || !inputDevice) {
         return;
     }
 
@@ -227,7 +283,9 @@ void NfcApp::onKeyboardEvent(lv_event_t* event)
     if (key >= 0x20 && key < 0x7f) {
         utf8[0] = static_cast<char>(key);
     }
-    self->onLvglKeyState(key, utf8, true);
+    const bool pressed =
+        lv_event_get_code(event) == LV_EVENT_KEY && lv_indev_get_state(inputDevice) == LV_INDEV_STATE_PRESSED;
+    self->onLvglKeyState(key, utf8, pressed);
 }
 
 }  // namespace cap_nfc
