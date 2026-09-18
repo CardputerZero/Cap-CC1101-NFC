@@ -9,6 +9,8 @@
 namespace cap_nfc {
 namespace {
 
+constexpr uint32_t kEscHintDelayMs = 500;
+
 #if LV_USE_SDL
 bool sdlHelpKeyHeld()
 {
@@ -47,6 +49,10 @@ void NfcApp::start()
     _started        = true;
     _quit_requested = false;
     _help_pressed   = false;
+    _esc_hold_active = false;
+    _esc_hold_hint_shown = false;
+    _esc_down_ms = 0;
+    _esc_hold_hint = nullptr;
     lv_obj_set_style_bg_color(lv_screen_active(), lv_color_hex(0x000000), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(lv_screen_active(), LV_OPA_COVER, LV_PART_MAIN);
     _help_view = std::make_unique<HelpView>(lv_screen_active());
@@ -81,6 +87,7 @@ void NfcApp::stop()
         _current_vm->onExit();
         _current_vm = nullptr;
     }
+    hideEscHoldHint();
     _help_view.reset();
     if (_input_group) {
 #if LV_USE_SDL
@@ -97,7 +104,46 @@ void NfcApp::stop()
     }
     _started      = false;
     _help_pressed = false;
+    _esc_hold_active = false;
+    _esc_hold_hint_shown = false;
+    _esc_down_ms = 0;
     spdlog::info("NfcApp: stop complete");
+}
+
+void NfcApp::showEscHoldHint()
+{
+    if (_esc_hold_hint) {
+        return;
+    }
+
+    _esc_hold_hint = lv_obj_create(lv_layer_top());
+    if (!_esc_hold_hint) {
+        return;
+    }
+    lv_obj_remove_style_all(_esc_hold_hint);
+    lv_obj_set_size(_esc_hold_hint, 224, 30);
+    lv_obj_align(_esc_hold_hint, LV_ALIGN_TOP_MID, 0, 6);
+    lv_obj_set_style_bg_color(_esc_hold_hint, lv_color_hex(0x1B1E24), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(_esc_hold_hint, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(_esc_hold_hint, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(_esc_hold_hint, lv_color_hex(0x5A6070), LV_PART_MAIN);
+    lv_obj_set_style_radius(_esc_hold_hint, 4, LV_PART_MAIN);
+
+    lv_obj_t* label = lv_label_create(_esc_hold_hint);
+    lv_label_set_text(label, "Hold ESC 3s to return home");
+    lv_obj_set_style_text_color(label, lv_color_hex(0xF2F4F7), LV_PART_MAIN);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_12, LV_PART_MAIN);
+    lv_obj_center(label);
+    lv_obj_move_foreground(_esc_hold_hint);
+}
+
+void NfcApp::hideEscHoldHint()
+{
+    if (!_esc_hold_hint) {
+        return;
+    }
+    lv_obj_del(_esc_hold_hint);
+    _esc_hold_hint = nullptr;
 }
 
 void NfcApp::onKey(uint32_t key)
@@ -145,14 +191,34 @@ bool NfcApp::onLvglKeyState(uint32_t lvKey, const char* utf8, bool pressed)
         return true;
     }
 
+    if (lvKey == LV_KEY_ESC) {
+        if (!pressed) {
+            if (_esc_hold_active) {
+                _esc_hold_active = false;
+                _esc_hold_hint_shown = false;
+                hideEscHoldHint();
+            }
+            return true;
+        }
+        if (_help_view && _help_view->visible()) {
+            onKey('\x1b');
+            return true;
+        }
+        if (_router.page() == PageId::Nfc && _nfc_vm.atRoot() && !_nfc_vm.modalActive()) {
+            _esc_hold_active = true;
+            _esc_hold_hint_shown = false;
+            _esc_down_ms = lv_tick_get();
+            return true;
+        }
+        onKey('\x1b');
+        return true;
+    }
+
     if (!pressed) {
         return true;
     }
 
     switch (lvKey) {
-        case LV_KEY_ESC:
-            onKey('\x1b');
-            return true;
         case LV_KEY_ENTER:
             onKey('\r');
             return true;
@@ -201,6 +267,16 @@ void NfcApp::tick(uint32_t nowMs)
     }
     if (_current_view) {
         _current_view->tick(nowMs);
+    }
+    if (_esc_hold_active) {
+        if (_router.page() != PageId::Nfc || !_nfc_vm.atRoot() || _nfc_vm.modalActive()) {
+            _esc_hold_active = false;
+            _esc_hold_hint_shown = false;
+            hideEscHoldHint();
+        } else if (!_esc_hold_hint_shown && nowMs - _esc_down_ms >= kEscHintDelayMs) {
+            _esc_hold_hint_shown = true;
+            showEscHoldHint();
+        }
     }
 }
 
