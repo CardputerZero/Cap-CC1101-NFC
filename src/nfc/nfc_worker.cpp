@@ -269,11 +269,9 @@ void NfcWorker::run()
     spdlog::info("NFC worker: hardware loop stopped; closing backend");
     pushState(ReaderState::Stopping, "Stopping NFC reader");
     clearPresence(true);
-    if (_stop_requested.load(std::memory_order_acquire)) {
-        _backend->closeImmediately();
-    } else {
-        _backend->close();
-    }
+    // The Cap remains powered for the shared LCD bus, so normal exit must
+    // disable the RF field. The process shutdown watchdog still bounds exit.
+    _backend->close();
     pushState(ReaderState::Stopped, "NFC reader stopped");
     spdlog::info("NFC worker: backend closed");
 }

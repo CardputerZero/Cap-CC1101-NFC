@@ -45,6 +45,7 @@ private:
     bool _quit_requested      = false;
     bool _started             = false;
     bool _help_pressed        = false;
+    bool _esc_pressed         = false;
     bool _esc_hold_active     = false;
     bool _esc_hold_hint_shown = false;
     uint32_t _esc_down_ms     = 0;

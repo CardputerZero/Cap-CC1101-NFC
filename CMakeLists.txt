@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(M5CardputerZeroCapCC1101NFC VERSION 1.0.0 LANGUAGES C CXX ASM)
+project(M5CardputerZeroCapCC1101NFC VERSION 1.0.1 LANGUAGES C CXX ASM)
 
 option(CAP_NFC_USE_SDL "Use LVGL's SDL backend and mock NFC reader" ON)
 option(BUILD_TESTING "Build Cap-CC1101-NFC tests" OFF)
@@ -244,6 +244,24 @@ set_target_properties(${CAP_NFC_BIN_NAME} PROPERTIES
 )
 
 if(BUILD_TESTING)
+    set(CAP_NFC_TEST_APP_CPP ${CAP_NFC_APP_CPP})
+    list(REMOVE_ITEM CAP_NFC_TEST_APP_CPP "${CAP_NFC_SRC_DIR}/main.cpp")
+    add_executable(cap_nfc_esc_exit_tests
+        tests/esc_exit_test.cpp
+        ${CAP_NFC_TEST_APP_CPP}
+        src/nfc/nfc_backend.cpp
+        src/nfc/ndef_parser.cpp
+        src/nfc/nfc_types.cpp
+        src/nfc/nfc_worker.cpp
+        src/nfc/mock_nfc_backend.cpp
+    )
+    target_include_directories(cap_nfc_esc_exit_tests PRIVATE "${CAP_NFC_SRC_DIR}")
+    target_compile_definitions(cap_nfc_esc_exit_tests PRIVATE CAP_NFC_USE_MOCK_BACKEND=1)
+    target_link_libraries(cap_nfc_esc_exit_tests PRIVATE
+        lvgl::lvgl smooth_ui_toolkit spdlog::spdlog Threads::Threads
+        ${CAP_NFC_SDL_LIBS} ${CAP_NFC_SYSTEM_LIBS})
+    add_test(NAME cap_nfc_esc_exit COMMAND cap_nfc_esc_exit_tests)
+
     add_executable(cap_nfc_worker_tests
         tests/nfc_worker_test.cpp
         src/models/nfc_model.cpp

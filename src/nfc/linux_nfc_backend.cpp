@@ -211,12 +211,7 @@ public:
 
     void close() noexcept override
     {
-        closeImpl(true);
-    }
-
-    void closeImmediately() noexcept override
-    {
-        closeImpl(false);
+        closeImpl();
     }
 
     void startDiscovery(const CancellationToken& cancellation) override
@@ -477,11 +472,11 @@ private:
         return protocol == DiscoveryProtocol::NfcF ? "NFC-F" : "NFC-A";
     }
 
-    void closeImpl(bool graceful) noexcept
+    void closeImpl() noexcept
     {
         const bool hadResources = _open || _driver || _transport || _spi.isOpen() || _interrupt || _power.enabled();
         if (hadResources) {
-            spdlog::info("NFC backend: closing resources (mode={})", graceful ? "graceful" : "immediate");
+            spdlog::info("NFC backend: closing resources");
         }
 
         _scanning                = false;
@@ -491,10 +486,10 @@ private:
         _nfcf_clean_no_tag_count = 0;
         _nfcf_inconclusive_count = 0;
         if (_driver) {
-            if (graceful) {
-                spdlog::info("NFC backend: disabling RF field through ST25R3916");
-                _driver->stop();
-            }
+            // Error/cancellation cleanup must also stop RF now that I/O power
+            // stays on. stop() issues commands without IRQ or discovery waits.
+            spdlog::info("NFC backend: disabling RF field through ST25R3916");
+            _driver->stop();
             _driver.reset();
         }
         _transport.reset();
@@ -508,7 +503,7 @@ private:
             _interrupt.reset();
         }
         if (_power.enabled()) {
-            spdlog::info("NFC backend: disabling Cap power controls");
+            spdlog::info("NFC backend: releasing Cap controls while retaining shared SPI power");
         }
         _power.disable();
         _open = false;

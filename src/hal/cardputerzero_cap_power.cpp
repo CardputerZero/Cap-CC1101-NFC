@@ -144,8 +144,6 @@ struct CardputerZeroCapPower::Impl {
     LinuxGpioLine gpio26{kGpioChipPath, kPowerEnableGpio};
     bool gpio26_pinctrl_high         = false;
     bool gpio26_requested            = false;
-    int previous_ext5v_brightness    = 0;
-    bool ext5v_restore_needed        = false;
     int previous_gpio_fun_brightness = 0;
     bool gpio_fun_restore_needed     = false;
     bool enabled                     = false;
@@ -215,7 +213,7 @@ bool CardputerZeroCapPower::enable(std::string& error, const std::atomic_bool* c
         return false;
     }
 
-    // Treat even a failed G26 command as potentially partial so cleanup drives it low.
+    // Even partial initialization must leave the shared SPI I/O supply enabled.
     spdlog::info("NFC power: configuring Cap POWER_EN on GPIO26 high");
     _impl->gpio26_pinctrl_high = true;
     if (!runPinctrl({"set", "26", "op", "dh"}, error, cancel)) {
@@ -230,12 +228,11 @@ bool CardputerZeroCapPower::enable(std::string& error, const std::atomic_bool* c
         _impl->gpio26_requested = true;
 
         const std::string brightness_path = ledAttributePath(kExt5vLedName, "brightness");
-        _impl->previous_ext5v_brightness  = readLedAttribute(kExt5vLedName, "brightness");
-        if (_impl->previous_ext5v_brightness <= 0) {
+        const int previous_ext5v_brightness = readLedAttribute(kExt5vLedName, "brightness");
+        if (previous_ext5v_brightness <= 0) {
             spdlog::debug("NFC power: enabling EXT5V through {}", brightness_path);
             try {
                 writeLedValue(kExt5vLedName, true);
-                _impl->ext5v_restore_needed = true;
             } catch (const std::system_error& exception) {
                 if (exception.code() == std::make_error_code(std::errc::permission_denied)) {
                     throw std::runtime_error("EXT5V LED class is read-only for this user; grant write access to " +
@@ -281,30 +278,15 @@ bool CardputerZeroCapPower::enable(std::string& error, const std::atomic_bool* c
 
 void CardputerZeroCapPower::disable() noexcept
 {
-    if (_impl->ext5v_restore_needed) {
-        try {
-            writeLedValue(kExt5vLedName, _impl->previous_ext5v_brightness != 0);
-            spdlog::debug("NFC power: restored EXT5V LED class brightness to {}", _impl->previous_ext5v_brightness);
-        } catch (const std::exception& exception) {
-            spdlog::warn("NFC power: failed to restore EXT5V LED class state: {}", exception.what());
-        }
-    }
-    _impl->ext5v_restore_needed = false;
-
+    // GPIO26 gates the Cap's 3.3 V rail, including the CC1101 SPI pins. Driving
+    // it low can freeze the LCD even while framebuffer/SPI writes succeed.
+    // Releasing a GPIO request retains its output level on this BSP.
     if (_impl->gpio26_requested) {
-        try {
-            _impl->gpio26.setValue(false);
-        } catch (const std::exception& exception) {
-            spdlog::warn("NFC power: failed to drive {} line {} low: {}", kGpioChipPath, kPowerEnableGpio,
-                         exception.what());
-        }
         _impl->gpio26.release();
         _impl->gpio26_requested = false;
-    } else if (_impl->gpio26_pinctrl_high) {
-        std::string cleanup_error;
-        if (!runPinctrl({"set", "26", "op", "dl"}, cleanup_error, nullptr)) {
-            spdlog::warn("NFC power: failed to return G26 low after partial initialization: {}", cleanup_error);
-        }
+    }
+    if (_impl->gpio26_pinctrl_high) {
+        spdlog::info("NFC power: retaining GPIO26 POWER_EN and EXT5V for the shared LCD SPI bus");
     }
 
     _impl->gpio26_pinctrl_high = false;

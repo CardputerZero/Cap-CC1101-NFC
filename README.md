@@ -77,6 +77,11 @@ initialization, the app checks the SPI node and, when needed, loads the
 BSP-provided `/boot/firmware/overlays/spi0-spidev2-gpio22-overlay.dtbo`. The
 overlay remains loaded until reboot.
 
+On normal exit, the app disables the NFC RF field and releases its GPIO/SPI
+handles. GPIO26 POWER_EN and EXT5V remain enabled because the Cap shares SPI
+with the LCD. Cutting the Cap's I/O supply can freeze the physical LCD even
+though APPLaunch continues rendering into the framebuffer.
+
 The Debian package launches this hardware app as root through a non-interactive,
 command-specific sudo rule for members of the `gpio` group. This works with the
 current APPLaunch behavior; the rule permits only the installed binary with no

@@ -18,6 +18,7 @@ public:
     CardputerZeroCapPower& operator=(CardputerZeroCapPower&&)      = delete;
 
     bool enable(std::string& error, const std::atomic_bool* cancel = nullptr);
+    // Release GPIO ownership without cutting the Cap's shared SPI I/O supply.
     void disable() noexcept;
     bool enabled() const noexcept;
 

@@ -49,12 +49,12 @@ class ScriptBackend final : public NfcBackend {
 public:
     ScriptBackend(std::vector<DiscoveryPollResult> script, std::size_t failedOpenCount = 0,
                   std::shared_ptr<std::atomic_size_t> openAttempts = {}, std::chrono::milliseconds openDelay = 0ms,
-                  std::shared_ptr<std::atomic_bool> immediateCloseObserved = {})
+                  std::shared_ptr<std::atomic_int> closeMode = {})
         : _script(std::move(script)),
           _failed_open_count(failedOpenCount),
           _open_attempts_observer(std::move(openAttempts)),
           _open_delay(openDelay),
-          _immediate_close_observer(std::move(immediateCloseObserved))
+          _close_mode(std::move(closeMode))
     {
     }
 
@@ -81,14 +81,17 @@ public:
     {
         _open     = false;
         _scanning = false;
+        if (_close_mode) {
+            _close_mode->store(1, std::memory_order_release);
+        }
     }
 
     void closeImmediately() noexcept override
     {
-        if (_immediate_close_observer) {
-            _immediate_close_observer->store(true, std::memory_order_release);
-        }
         close();
+        if (_close_mode) {
+            _close_mode->store(2, std::memory_order_release);
+        }
     }
 
     void startDiscovery(const CancellationToken& cancellation) override
@@ -131,7 +134,7 @@ private:
     std::size_t _open_attempts     = 0;
     std::shared_ptr<std::atomic_size_t> _open_attempts_observer;
     std::chrono::milliseconds _open_delay{0};
-    std::shared_ptr<std::atomic_bool> _immediate_close_observer;
+    std::shared_ptr<std::atomic_int> _close_mode;
     bool _open     = false;
     bool _scanning = false;
 };
@@ -303,11 +306,11 @@ bool testRetryCoalescedWhileInitializing()
     return true;
 }
 
-bool testStopUsesImmediateBackendClose()
+bool testStopClosesBackendWithRfShutdown()
 {
-    auto immediateCloseObserved = std::make_shared<std::atomic_bool>(false);
+    auto closeMode = std::make_shared<std::atomic_int>(0);
     NfcWorker worker(
-        std::make_unique<ScriptBackend>(std::vector<DiscoveryPollResult>{}, 0, nullptr, 0ms, immediateCloseObserved));
+        std::make_unique<ScriptBackend>(std::vector<DiscoveryPollResult>{}, 0, nullptr, 0ms, closeMode));
     CHECK(worker.start());
 
     std::vector<NfcEvent> events;
@@ -315,7 +318,7 @@ bool testStopUsesImmediateBackendClose()
                        [](const NfcEvent& event) { return std::holds_alternative<InitializedEvent>(event); }));
     worker.stop();
 
-    CHECK(immediateCloseObserved->load(std::memory_order_acquire));
+    CHECK(closeMode->load(std::memory_order_acquire) == 1);
     return true;
 }
 
@@ -356,7 +359,7 @@ int main()
 {
     if (!testPresentAndRemoveDebounce() || !testNoObservationDoesNotRemove() || !testTagReplacementOrdering() ||
         !testRetryAfterInitializationFailure() || !testRetryCoalescedWhileInitializing() ||
-        !testStopUsesImmediateBackendClose() || !testModelPreservesLastSeenWhenTagIsRemoved()) {
+        !testStopClosesBackendWithRfShutdown() || !testModelPreservesLastSeenWhenTagIsRemoved()) {
         return 1;
     }
     std::puts("NFC worker tests passed");

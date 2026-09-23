@@ -432,6 +432,8 @@ void testInitializationAndType2Poll()
             "expected an explicit no-tag result after removal");
     driver.stop();
     require(!driver.ready(), "driver must stop");
+    require((transport.registerValue(0x02) & 0x48) == 0,
+            "exit must disable RF transmitter and receiver while the Cap stays powered");
 }
 
 void testReceiveStartIsNotACompleteFrame()
@@ -580,6 +582,11 @@ void testNfcFPollAndProtocolSwitch()
     require(aPoll.kind == St25r3916NfcAPollKind::Tag && aPoll.tag, "switching back to NFC-A must recover the tag");
     require(transport.registerValue(0x03) == 0x08, "NFC-A mode must be restored after NFC-F polling");
     require((transport.registerValue(0x12) & 0x02) == 0, "NFC-A mode must clear NFC-F's no-response timer handling");
+    driver.startNfcF(cancellation);
+    cancelled.store(true);
+    driver.stop();
+    require(!driver.ready() && !driver.discoveryEnabled(), "cancelled NFC-F scanning must stop on exit");
+    require((transport.registerValue(0x02) & 0x48) == 0, "NFC-F exit must disable RF with the Cap still powered");
 }
 
 void testNfcFNoTagClassification()
